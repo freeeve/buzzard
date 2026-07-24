@@ -116,7 +116,7 @@ On a full real-world home directory, warm cache:
 
 | tool | mean | total CPU |
 |---|---|---|
-| buzzard v0.6.3 | 88.7 ± 5.0 s | 100 s |
+| buzzard v0.6.4 | 88.7 ± 5.0 s | 100 s |
 | gdu (master, `-npc`) | 170.5 ± 20.5 s | 778 s |
 
 1.92 ± 0.26× faster, with ~7.8× less total CPU — while also classifying
