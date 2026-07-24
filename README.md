@@ -49,8 +49,10 @@ nothing was deleted. buzzard only circles what is already dead.
   is your call, not buzzard's.
 
 Sizing is honest: allocated blocks (not apparent size), hardlinked inodes
-counted once, symlinks never followed. The number reported is the number
-deletion would actually free.
+counted once, symlinks never followed, and directory inodes at their real
+allocated size -- zero on APFS, real blocks on filesystems that allocate
+them (some tools pad a flat 4 KiB per directory instead). The number
+reported is the number deletion would actually free.
 
 ## Roadmap
 
