@@ -7,8 +7,10 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -18,9 +20,14 @@ import (
 	"github.com/freeeve/buzzard/internal/rules"
 	"github.com/freeeve/buzzard/internal/scan"
 	"github.com/freeeve/buzzard/internal/trash"
+	"github.com/freeeve/buzzard/internal/veto"
 )
 
-const version = "0.3.0"
+// activeWindow is how recently a candidate's subtree must have been
+// modified to be considered in active use.
+const activeWindow = 15 * time.Minute
+
+const version = "0.4.0"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -109,6 +116,17 @@ func runClean(res *scan.Result, rs *rules.Ruleset, mpath string, yes bool) int {
 	for _, c := range picks {
 		if m := rs.Classify(c.Path); m == nil || m.Tier != rules.TierA {
 			fmt.Printf("  skip %s: evidence changed since the scan\n", c.Path)
+			continue
+		}
+		if v := veto.Recent(c.NewestMod, activeWindow); v != nil {
+			fmt.Printf("  skip %s: in use (%s)\n", c.Path, v.Reason)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		v := veto.OpenHandles(ctx, c.Path)
+		cancel()
+		if v != nil {
+			fmt.Printf("  skip %s: in use (%s)\n", c.Path, v.Reason)
 			continue
 		}
 		dest, err := trash.Put(c.Path)
@@ -200,7 +218,7 @@ Flags:
 // clean is about to run.
 func report(res *scan.Result, footer bool) {
 	sort.Slice(res.Candidates, func(i, j int) bool {
-		return res.Candidates[i].Bytes > res.Candidates[j].Bytes
+		return score(res.Candidates[i]) > score(res.Candidates[j])
 	})
 	var tierA, tierB []scan.Candidate
 	var reclaimA, reclaimB int64
@@ -233,11 +251,29 @@ func printTier(title string, cs []scan.Candidate) {
 	}
 	fmt.Println(title)
 	for _, c := range cs {
-		fmt.Printf("  %9s  %-28s %s\n", human(c.Bytes), c.Match.Category, c.Path)
+		active := ""
+		if v := veto.Recent(c.NewestMod, activeWindow); v != nil {
+			active = "  [in use: " + v.Reason + "]"
+		}
+		fmt.Printf("  %9s  %-28s %s%s\n", human(c.Bytes), c.Match.Category, c.Path, active)
 		fmt.Printf("             idle %-22s regen: %s\n", idle(c.NewestMod), c.Match.Regen)
 		fmt.Printf("             why: %s\n", c.Match.Evidence)
 	}
 	fmt.Println()
+}
+
+// score orders candidates by reclaim value: size weighted by how long the
+// subtree has sat idle, so a smaller two-year-old cache can outrank a large
+// dependency dir rebuilt this morning.
+func score(c scan.Candidate) float64 {
+	idleDays := 0.0
+	if !c.NewestMod.IsZero() {
+		idleDays = time.Since(c.NewestMod).Hours() / 24
+		if idleDays < 0 {
+			idleDays = 0
+		}
+	}
+	return float64(c.Bytes) * (1 + math.Log2(1+idleDays))
 }
 
 // idle renders how long ago a subtree was last modified.
