@@ -76,11 +76,21 @@ type inode struct {
 	ino uint64
 }
 
-// New returns a Scanner using the given ruleset.
+// New returns a Scanner using the given ruleset and the default width.
 func New(rs *rules.Ruleset) *Scanner {
+	return NewWidth(rs, defaultWalkers)
+}
+
+// NewWidth returns a Scanner with an explicit walker width. A width below
+// one falls back to the default; a width of one makes the walk sequential,
+// which suits media where overlapping seeks cost more than they save.
+func NewWidth(rs *rules.Ruleset, walkers int) *Scanner {
+	if walkers < 1 {
+		walkers = defaultWalkers
+	}
 	return &Scanner{
 		rules: rs,
-		sem:   make(chan struct{}, defaultWalkers),
+		sem:   make(chan struct{}, walkers),
 		seen:  make(map[inode]struct{}),
 	}
 }

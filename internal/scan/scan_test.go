@@ -383,6 +383,26 @@ func TestCandidateNodeIsLeaf(t *testing.T) {
 	}
 }
 
+// TestNewWidthClampsAndScans checks the walker knob: any width produces
+// the same totals, and a nonsense width falls back rather than deadlocking
+// on a zero-capacity semaphore.
+func TestNewWidthClampsAndScans(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 12; i++ {
+		writeBytes(t, root, fmt.Sprintf("d%02d/sub/f.bin", i), 4096)
+	}
+	want := New(rules.Default(t.TempDir())).Run(root).TotalBytes
+	for _, w := range []int{-1, 0, 1, 2, 8, 64} {
+		res := NewWidth(rules.Default(t.TempDir()), w).Run(root)
+		if res.TotalBytes != want {
+			t.Errorf("width %d: total = %d, want %d", w, res.TotalBytes, want)
+		}
+		if res.Errors != 0 {
+			t.Errorf("width %d: errors = %d", w, res.Errors)
+		}
+	}
+}
+
 // TestTreeBuildIsRaceFree exercises the tree across a wide, deep fixture so
 // -race can catch unsynchronized node writes from the concurrent walkers.
 func TestTreeBuildIsRaceFree(t *testing.T) {

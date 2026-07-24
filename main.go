@@ -43,6 +43,7 @@ func main() {
 	interactive := flag.Bool("i", false, "interactive mode: browse, mark, and clean candidates")
 	minSize := flag.String("min-size", "1M", "hide candidates smaller than this (e.g. 500K, 1M, 0)")
 	showAll := flag.Bool("all", false, "show candidates of any size (same as -min-size 0)")
+	walkers := flag.Int("walkers", 0, "concurrent directory walkers (0 picks the default; 1 scans sequentially)")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
@@ -93,7 +94,7 @@ func main() {
 	if *showAll {
 		floor = 0
 	}
-	res := scan.New(rs).Run(root)
+	res := scan.NewWidth(rs, *walkers).Run(root)
 	sortByScore(res)
 	hiddenCount, hiddenBytes := applyFloor(res, floor)
 	if *interactive {
