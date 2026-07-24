@@ -124,9 +124,6 @@ reclaim candidates during the walk, which gdu does not do. The CPU gap is
 the wider of the two: buzzard spends 97 s of system time to gdu's 733 s,
 which is the `getattrlistbulk` batching showing up as syscalls not made.
 
-On a synthetic 50k file / 5k dir fixture the ratio holds at 1.92 ± 0.22×
-(36.7 ± 3.7 ms vs 70.3 ± 3.6 ms, measured at v0.1.3).
-
 Other platforms use a portable ReadDir+lstat walker, verified equivalent
 by test.
 
