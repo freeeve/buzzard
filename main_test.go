@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/freeeve/buzzard/internal/rules"
 	"github.com/freeeve/buzzard/internal/scan"
 )
 
@@ -96,5 +99,83 @@ func TestBreakdownRowsAccountForEveryByte(t *testing.T) {
 func TestBreakdownRowsNilTree(t *testing.T) {
 	if rows := breakdownRows(nil); rows != nil {
 		t.Errorf("got %v, want nil", rows)
+	}
+}
+
+// testEpoch anchors candidate timestamps so equal-idle candidates score
+// exactly equal. Scan timestamps come from second-granularity mtimes, so
+// exact ties are ordinary in practice, not a contrived case.
+var testEpoch = time.Now().Truncate(time.Hour)
+
+// cand builds a candidate with a fixed idle age measured from testEpoch.
+func cand(path string, bytes int64, idle time.Duration) scan.Candidate {
+	return scan.Candidate{
+		Path: path, Bytes: bytes, NewestMod: testEpoch.Add(-idle),
+		Match: &rules.Match{Category: "node_modules", Tier: rules.TierA},
+	}
+}
+
+func paths(cs []scan.Candidate) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Path
+	}
+	return out
+}
+
+// TestSortByScoreIsDeterministicForTies is the regression for task 022:
+// the concurrent walk appends candidates in nondeterministic order, so
+// equal-valued entries used to swap places between runs of one binary.
+func TestSortByScoreIsDeterministicForTies(t *testing.T) {
+	idle := 30 * 24 * time.Hour
+	forward := &scan.Result{Candidates: []scan.Candidate{
+		cand("/src/alpha", 1<<20, idle),
+		cand("/src/beta", 1<<20, idle),
+		cand("/src/gamma", 1<<20, idle),
+	}}
+	reverse := &scan.Result{Candidates: []scan.Candidate{
+		cand("/src/gamma", 1<<20, idle),
+		cand("/src/beta", 1<<20, idle),
+		cand("/src/alpha", 1<<20, idle),
+	}}
+	sortByScore(forward)
+	sortByScore(reverse)
+	want := []string{"/src/alpha", "/src/beta", "/src/gamma"}
+	for i := range want {
+		if forward.Candidates[i].Path != want[i] || reverse.Candidates[i].Path != want[i] {
+			t.Fatalf("tie order not stable: %v vs %v, want %v",
+				paths(forward.Candidates), paths(reverse.Candidates), want)
+		}
+	}
+}
+
+// TestSortByScoreRanksByValue keeps the tiebreak from overriding the
+// actual ordering: bigger and idler still wins.
+func TestSortByScoreRanksByValue(t *testing.T) {
+	res := &scan.Result{Candidates: []scan.Candidate{
+		cand("/z/small-old", 1<<20, 365*24*time.Hour),
+		cand("/a/big-fresh", 900<<20, time.Hour),
+	}}
+	sortByScore(res)
+	if res.Candidates[0].Path != "/a/big-fresh" {
+		t.Errorf("order = %v, want the large candidate first", paths(res.Candidates))
+	}
+}
+
+// TestSortByScoreUsesOneClockReading guards the comparator against the
+// clock moving mid-sort, which made it non-transitive for near-equal
+// entries. A large set of identical candidates exercises many comparisons.
+func TestSortByScoreUsesOneClockReading(t *testing.T) {
+	var cs []scan.Candidate
+	for i := 0; i < 500; i++ {
+		cs = append(cs, cand(fmt.Sprintf("/src/p%03d", i), 1<<20, 30*24*time.Hour))
+	}
+	res := &scan.Result{Candidates: cs}
+	sortByScore(res)
+	for i := 1; i < len(res.Candidates); i++ {
+		if res.Candidates[i-1].Path >= res.Candidates[i].Path {
+			t.Fatalf("not fully ordered at %d: %q then %q",
+				i, res.Candidates[i-1].Path, res.Candidates[i].Path)
+		}
 	}
 }

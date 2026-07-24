@@ -143,11 +143,37 @@ func applyFloor(res *scan.Result, floor int64) (count int, bytes int64) {
 	return count, bytes
 }
 
-// sortByScore orders candidates by reclaim value for both output modes.
+// scored pairs a candidate with its reclaim value so the sort compares
+// fixed numbers rather than recomputing them per comparison.
+type scored struct {
+	cand  scan.Candidate
+	score float64
+}
+
+// sortByScore orders candidates by reclaim value for every output mode.
+//
+// Scores are computed once against a single clock reading: score depends on
+// how long a candidate has been idle, so calling it from inside the
+// comparator would let time advance mid-sort and make the ordering
+// non-transitive for near-equal entries. Ties then break on path, because
+// the concurrent walk appends candidates in whatever order the walkers
+// finish -- without a total order, equal-valued entries swap places between
+// runs of the same binary.
 func sortByScore(res *scan.Result) {
-	sort.Slice(res.Candidates, func(i, j int) bool {
-		return score(res.Candidates[i]) > score(res.Candidates[j])
+	now := time.Now()
+	all := make([]scored, len(res.Candidates))
+	for i, c := range res.Candidates {
+		all[i] = scored{cand: c, score: score(c, now)}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].score != all[j].score {
+			return all[i].score > all[j].score
+		}
+		return all[i].cand.Path < all[j].cand.Path
 	})
+	for i, s := range all {
+		res.Candidates[i] = s.cand
+	}
 }
 
 // executeClean re-verifies, vetoes, trashes, and records the picked
@@ -448,10 +474,10 @@ func printTier(title string, cs []scan.Candidate) {
 // score orders candidates by reclaim value: size weighted by how long the
 // subtree has sat idle, so a smaller two-year-old cache can outrank a large
 // dependency dir rebuilt this morning.
-func score(c scan.Candidate) float64 {
+func score(c scan.Candidate, now time.Time) float64 {
 	idleDays := 0.0
 	if !c.NewestMod.IsZero() {
-		idleDays = time.Since(c.NewestMod).Hours() / 24
+		idleDays = now.Sub(c.NewestMod).Hours() / 24
 		if idleDays < 0 {
 			idleDays = 0
 		}
