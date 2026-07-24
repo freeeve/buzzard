@@ -2,8 +2,10 @@ package scan
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/freeeve/buzzard/internal/rules"
@@ -85,6 +87,76 @@ func TestNestedCandidateNotDoubleCounted(t *testing.T) {
 	res := newScanner(t).Run(root)
 	if len(res.Candidates) != 1 {
 		t.Fatalf("candidates = %d, want 1 (outer only)", len(res.Candidates))
+	}
+}
+
+var (
+	benchOnce sync.Once
+	benchRoot string
+)
+
+// benchTree lazily builds a shared fixture of 500 directories x 20 small
+// files (10k files) plus a few classifiable candidates, reused across all
+// benchmarks in the package so tree construction never pollutes timings.
+func benchTree(b *testing.B) string {
+	benchOnce.Do(func() {
+		root, err := os.MkdirTemp("", "buzzard-bench")
+		if err != nil {
+			b.Fatal(err)
+		}
+		payload := bytes.Repeat([]byte{'x'}, 256)
+		for d := 0; d < 500; d++ {
+			dir := filepath.Join(root, fmt.Sprintf("proj%02d", d%50), fmt.Sprintf("dir%03d", d))
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				b.Fatal(err)
+			}
+			for f := 0; f < 20; f++ {
+				name := filepath.Join(dir, fmt.Sprintf("file%03d.dat", f))
+				if err := os.WriteFile(name, payload, 0o644); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+		app := filepath.Join(root, "proj00", "webapp")
+		for _, f := range []string{"package.json", "package-lock.json"} {
+			if err := os.MkdirAll(app, 0o755); err != nil {
+				b.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(app, f), []byte("{}"), 0o644); err != nil {
+				b.Fatal(err)
+			}
+		}
+		if err := os.MkdirAll(filepath.Join(app, "node_modules", "dep"), 0o755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(app, "node_modules", "dep", "index.js"), payload, 0o644); err != nil {
+			b.Fatal(err)
+		}
+		benchRoot = root
+	})
+	return benchRoot
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if benchRoot != "" {
+		os.RemoveAll(benchRoot)
+	}
+	os.Exit(code)
+}
+
+// BenchmarkScan measures a full scan of the shared 10k-file fixture; the
+// per-file allocation count is the number to drive down.
+func BenchmarkScan(b *testing.B) {
+	root := benchTree(b)
+	home := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res := New(rules.Default(home)).Run(root)
+		if res.Errors > 0 {
+			b.Fatalf("scan errors: %d", res.Errors)
+		}
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 
 // mktree creates each relative path under root; paths ending in / become
 // directories, everything else an empty file.
-func mktree(t *testing.T, root string, paths ...string) {
+func mktree(t testing.TB, root string, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
 		full := filepath.Join(root, filepath.FromSlash(p))
@@ -121,5 +121,21 @@ func TestUnknownDirDoesNotMatch(t *testing.T) {
 	mktree(t, root, "docs/notes.txt")
 	if m := Default(root).Classify(filepath.Join(root, "docs")); m != nil {
 		t.Errorf("plain dir matched: %+v", m)
+	}
+}
+
+// BenchmarkClassifyMiss measures the no-match path, which runs once for
+// every directory the scanner visits and must stay near zero-cost.
+func BenchmarkClassifyMiss(b *testing.B) {
+	root := b.TempDir()
+	mktree(b, root, "plain/dir/notes.txt")
+	dir := filepath.Join(root, "plain", "dir")
+	rs := Default(root)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if m := rs.Classify(dir); m != nil {
+			b.Fatal("unexpected match")
+		}
 	}
 }
