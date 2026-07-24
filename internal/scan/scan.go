@@ -31,10 +31,26 @@ type Candidate struct {
 	NewestMod time.Time
 }
 
-// Result summarizes a completed scan.
+// Node is one directory in the scanned tree, retained so the report can
+// account for where space went rather than only what is reclaimable. Own
+// covers the directory's own inode plus the files directly inside it;
+// Bytes adds every child subtree. A node claimed by a rule is a leaf: the
+// scan does not descend past a candidate.
+type Node struct {
+	Name        string
+	Own         int64
+	Bytes       int64
+	Reclaimable int64
+	Match       *rules.Match
+	Children    []*Node
+}
+
+// Result summarizes a completed scan. Tree is the directory tree rooted at
+// Root, whose Bytes equals TotalBytes.
 type Result struct {
 	Root       string
 	TotalBytes int64
+	Tree       *Node
 	Candidates []Candidate
 	Errors     int64
 }
@@ -80,14 +96,32 @@ func (s *Scanner) Run(root string) *Result {
 	} else {
 		atomic.AddInt64(&s.errs, 1)
 	}
+	tree := &Node{Name: root, Own: rootBytes}
 	s.wg.Add(1)
-	s.walkDir(root, true, rootBytes)
+	s.walkDir(root, true, rootBytes, tree)
 	s.wg.Wait()
+	rollup(tree)
 	return &Result{
 		Root:       root,
 		TotalBytes: atomic.LoadInt64(&s.total),
+		Tree:       tree,
 		Candidates: s.found,
 		Errors:     atomic.LoadInt64(&s.errs),
+	}
+}
+
+// rollup totals each subtree bottom-up once the walk has finished. It runs
+// single-threaded after the wait, so no node needs synchronization: during
+// the walk each node is written only by the goroutine that owns it.
+func rollup(n *Node) {
+	n.Bytes = n.Own
+	for _, c := range n.Children {
+		rollup(c)
+		n.Bytes += c.Bytes
+		n.Reclaimable += c.Reclaimable
+	}
+	if n.Match != nil {
+		n.Reclaimable = n.Bytes
 	}
 }
 
@@ -104,7 +138,7 @@ func join(dir, name string) string {
 // directories when a semaphore slot is free and recursing inline otherwise.
 // ownBytes is the directory's own allocated size, observed by whoever listed
 // it, so a claimed candidate can charge its own inode to the reclaim total.
-func (s *Scanner) walkDir(dir string, isRoot bool, ownBytes int64) {
+func (s *Scanner) walkDir(dir string, isRoot bool, ownBytes int64, node *Node) {
 	defer s.wg.Done()
 	if !isRoot {
 		if m := s.rules.Classify(dir); m != nil {
@@ -115,6 +149,7 @@ func (s *Scanner) walkDir(dir string, isRoot bool, ownBytes int64) {
 			if newestSec > 0 {
 				newest = time.Unix(newestSec, 0)
 			}
+			node.Own, node.Match = bytes, m
 			s.mu.Lock()
 			s.found = append(s.found, Candidate{Path: dir, Match: m, Bytes: bytes, NewestMod: newest})
 			s.mu.Unlock()
@@ -124,20 +159,27 @@ func (s *Scanner) walkDir(dir string, isRoot bool, ownBytes int64) {
 	atomic.AddInt64(&s.total, ownBytes)
 	err := s.listDir(dir, func(e *entryStat) {
 		if !e.isDir {
-			atomic.AddInt64(&s.total, s.dedupBytes(e))
+			b := s.dedupBytes(e)
+			atomic.AddInt64(&s.total, b)
+			node.Own += b
 			return
 		}
 		path := join(dir, e.name)
 		own := e.bytes
+		// Children are appended here, serially in this directory's own
+		// listing callback, so the slice needs no lock; each child
+		// goroutine then writes only the node handed to it.
+		child := &Node{Name: e.name, Own: own}
+		node.Children = append(node.Children, child)
 		s.wg.Add(1)
 		select {
 		case s.sem <- struct{}{}:
 			go func() {
 				defer func() { <-s.sem }()
-				s.walkDir(path, false, own)
+				s.walkDir(path, false, own, child)
 			}()
 		default:
-			s.walkDir(path, false, own)
+			s.walkDir(path, false, own, child)
 		}
 	})
 	if err != nil {

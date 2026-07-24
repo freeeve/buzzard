@@ -287,3 +287,114 @@ func TestSymlinksNotFollowed(t *testing.T) {
 		t.Errorf("total = %d; scan followed a symlink out of the tree", res.TotalBytes)
 	}
 }
+
+// findChild returns the named child of n, or nil.
+func findChild(n *Node, name string) *Node {
+	for _, c := range n.Children {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// TestTreeTotalMatchesScanTotal locks the accounting invariant: the
+// breakdown is an account of the whole scan, so the root node has to carry
+// exactly the bytes the scan reported.
+func TestTreeTotalMatchesScanTotal(t *testing.T) {
+	root := t.TempDir()
+	writeBytes(t, root, "a/one.bin", 1<<20)
+	writeBytes(t, root, "a/deep/two.bin", 1<<20)
+	writeBytes(t, root, "b/three.bin", 1<<20)
+	writeBytes(t, root, "loose.bin", 1<<20)
+	res := newScanner(t).Run(root)
+	if res.Tree == nil {
+		t.Fatal("nil tree")
+	}
+	if res.Tree.Bytes != res.TotalBytes {
+		t.Errorf("tree bytes = %d, total = %d; breakdown would not sum to the report",
+			res.Tree.Bytes, res.TotalBytes)
+	}
+	var sum int64
+	for _, c := range res.Tree.Children {
+		sum += c.Bytes
+	}
+	if sum+res.Tree.Own != res.Tree.Bytes {
+		t.Errorf("children %d + own %d != tree %d", sum, res.Tree.Own, res.Tree.Bytes)
+	}
+	if findChild(res.Tree, "a") == nil || findChild(res.Tree, "b") == nil {
+		t.Error("expected children a and b in the tree")
+	}
+}
+
+// TestTreeAttributesReclaimable checks the column that makes the breakdown
+// worth printing: how much of a subtree a rule has claimed.
+func TestTreeAttributesReclaimable(t *testing.T) {
+	root := t.TempDir()
+	writeBytes(t, root, "proj/app/package.json", 10)
+	writeBytes(t, root, "proj/app/package-lock.json", 10)
+	writeBytes(t, root, "proj/app/node_modules/dep/index.js", 1<<20)
+	writeBytes(t, root, "keep/data.bin", 1<<20)
+	res := newScanner(t).Run(root)
+	proj, keep := findChild(res.Tree, "proj"), findChild(res.Tree, "keep")
+	if proj == nil || keep == nil {
+		t.Fatal("expected proj and keep children")
+	}
+	if proj.Reclaimable < 1<<20 {
+		t.Errorf("proj reclaimable = %d, want >= %d (node_modules beneath it)",
+			proj.Reclaimable, 1<<20)
+	}
+	if proj.Reclaimable > proj.Bytes {
+		t.Errorf("proj reclaimable %d exceeds its size %d", proj.Reclaimable, proj.Bytes)
+	}
+	if keep.Reclaimable != 0 {
+		t.Errorf("keep reclaimable = %d, want 0", keep.Reclaimable)
+	}
+	if res.Tree.Reclaimable != proj.Reclaimable+keep.Reclaimable {
+		t.Errorf("root reclaimable %d != sum of children %d",
+			res.Tree.Reclaimable, proj.Reclaimable+keep.Reclaimable)
+	}
+}
+
+// TestCandidateNodeIsLeaf documents that the scan stops at a claimed
+// directory, so its node carries the whole subtree and no children.
+func TestCandidateNodeIsLeaf(t *testing.T) {
+	root := t.TempDir()
+	writeBytes(t, root, "app/package.json", 10)
+	writeBytes(t, root, "app/package-lock.json", 10)
+	writeBytes(t, root, "app/node_modules/dep/sub/deep.js", 1<<20)
+	res := newScanner(t).Run(root)
+	app := findChild(res.Tree, "app")
+	if app == nil {
+		t.Fatal("no app node")
+	}
+	nm := findChild(app, "node_modules")
+	if nm == nil {
+		t.Fatal("no node_modules node")
+	}
+	if nm.Match == nil {
+		t.Fatal("node_modules was not claimed by a rule")
+	}
+	if len(nm.Children) != 0 {
+		t.Errorf("candidate node has %d children, want 0 (scan should not descend)", len(nm.Children))
+	}
+	if nm.Reclaimable != nm.Bytes || nm.Bytes < 1<<20 {
+		t.Errorf("candidate node: bytes = %d, reclaimable = %d", nm.Bytes, nm.Reclaimable)
+	}
+}
+
+// TestTreeBuildIsRaceFree exercises the tree across a wide, deep fixture so
+// -race can catch unsynchronized node writes from the concurrent walkers.
+func TestTreeBuildIsRaceFree(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 40; i++ {
+		writeBytes(t, root, fmt.Sprintf("d%02d/sub/deep/file.bin", i), 4096)
+	}
+	res := newScanner(t).Run(root)
+	if got := len(res.Tree.Children); got != 40 {
+		t.Errorf("children = %d, want 40", got)
+	}
+	if res.Tree.Bytes != res.TotalBytes {
+		t.Errorf("tree bytes = %d, total = %d", res.Tree.Bytes, res.TotalBytes)
+	}
+}
