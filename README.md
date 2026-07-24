@@ -15,6 +15,7 @@ buzzard -i ~/src         # interactive: walk the tree, mark, clean behind a conf
 buzzard -clean ~/src     # move tier A candidates to the OS trash (asks first)
 buzzard -restore         # put back everything from the most recent clean
 buzzard -dupes ~/src     # also list duplicate files (identical content)
+buzzard -walkers 1 /mnt  # scan sequentially (spinning disks, network mounts)
 ```
 
 Every run opens with a breakdown of where the space actually went -- one
@@ -143,6 +144,12 @@ which is the `getattrlistbulk` batching showing up as syscalls not made.
 
 Other platforms use a portable ReadDir+lstat walker, verified equivalent
 by test.
+
+The walk runs eight directories at a time by default. That width was
+measured, not guessed: past it the walkers spend their time contending in
+the kernel rather than reading, and system time rises fivefold while the
+scan gets slower. `-walkers 1` scans sequentially, for media where
+overlapping seeks cost more than they save.
 
 ## Install
 
