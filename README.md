@@ -17,6 +17,11 @@ buzzard -restore         # put back everything from the most recent clean
 buzzard -dupes ~/src     # also list duplicate files (identical content)
 ```
 
+Every run opens with a breakdown of where the space actually went -- one
+line per top-level directory, with the share of each that is reclaimable.
+Other disk tools can show you the sizes; only buzzard can fill in that
+second column.
+
 Candidates under 1 MiB fold into a single rollup line by default
 (`-all` or `-min-size 500K` to adjust). Candidates rank by reclaim value
 -- size weighted by idle time -- and
@@ -25,6 +30,13 @@ is flagged in use and skipped by cleaning.
 
 ```
 buzzard scanned /Users/you/src: 94.2 GiB on disk
+
+WHERE IT WENT
+   38.4 GiB  webapp/                        4.1 GiB reclaimable
+   22.7 GiB  rusty/                         2.3 GiB reclaimable
+   18.1 GiB  datasets/                            --
+    9.9 GiB  old/                         812.4 MiB reclaimable
+    5.1 GiB  (12 more)                      1.2 GiB reclaimable
 
 TIER A — regenerable by contract
     4.1 GiB  node_modules                 /Users/you/src/webapp/node_modules

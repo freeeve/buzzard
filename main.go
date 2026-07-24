@@ -334,6 +334,7 @@ func report(res *scan.Result, footer bool) {
 		}
 	}
 	fmt.Printf("buzzard scanned %s: %s on disk\n\n", res.Root, format.Human(res.TotalBytes))
+	printBreakdown(res.Tree)
 	printTier("TIER A — regenerable by contract", tierA)
 	printTier("TIER B — probably disposable, review each", tierB)
 	fmt.Printf("reclaimable: %s by contract (tier A), %s more after review (tier B)\n",
@@ -344,6 +345,86 @@ func report(res *scan.Result, footer bool) {
 	if footer {
 		fmt.Println("\nnothing was deleted. buzzard only circles what is already dead.")
 	}
+}
+
+// breakdownTop is how many entries the breakdown lists before folding the
+// rest into a rollup line. A tail of exactly one is shown rather than
+// rolled up, since "(1 more)" hides nothing and costs a line either way.
+const breakdownTop = 10
+
+// row is one line of the storage breakdown.
+type row struct {
+	name        string
+	bytes       int64
+	reclaimable int64
+}
+
+// breakdownRows turns a scanned tree into the lines of the breakdown:
+// one per immediate child, plus an entry for the root's own loose files,
+// ordered largest first. Ties break on name so the report does not inherit
+// the filesystem's unstable listing order. The rows always account for the
+// full subtree -- callers roll up the tail rather than dropping it.
+func breakdownRows(tree *scan.Node) []row {
+	if tree == nil {
+		return nil
+	}
+	rows := make([]row, 0, len(tree.Children)+1)
+	for _, c := range tree.Children {
+		rows = append(rows, row{name: c.Name + "/", bytes: c.Bytes, reclaimable: c.Reclaimable})
+	}
+	if tree.Own > 0 {
+		rows = append(rows, row{name: "(files here)", bytes: tree.Own})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].bytes != rows[j].bytes {
+			return rows[i].bytes > rows[j].bytes
+		}
+		return rows[i].name < rows[j].name
+	})
+	return rows
+}
+
+// printBreakdown accounts for where the scanned bytes went. Every byte the
+// scan counted appears on some line, so the section reads as an account
+// rather than a highlight reel; the reclaim column is the part no other
+// disk tool can fill in. Reclaimable totals ignore -min-size, which hides
+// small candidates from the listing without changing what is actually
+// reclaimable.
+func printBreakdown(tree *scan.Node) {
+	rows := breakdownRows(tree)
+	if len(rows) < 2 {
+		return
+	}
+	shown := rows
+	var tail []row
+	if len(rows) > breakdownTop+1 {
+		shown, tail = rows[:breakdownTop], rows[breakdownTop:]
+	}
+	fmt.Println("WHERE IT WENT")
+	for _, r := range shown {
+		printBreakdownRow(r)
+	}
+	if len(tail) > 0 {
+		var agg row
+		agg.name = fmt.Sprintf("(%d more)", len(tail))
+		for _, r := range tail {
+			agg.bytes += r.bytes
+			agg.reclaimable += r.reclaimable
+		}
+		printBreakdownRow(agg)
+	}
+	fmt.Println()
+}
+
+// printBreakdownRow renders one breakdown line, leaving the reclaim column
+// as a dash when a rule claimed nothing beneath it.
+func printBreakdownRow(r row) {
+	if r.reclaimable == 0 {
+		fmt.Printf("  %9s  %-28s %9s\n", format.Human(r.bytes), r.name, "--")
+		return
+	}
+	fmt.Printf("  %9s  %-28s %9s reclaimable\n",
+		format.Human(r.bytes), r.name, format.Human(r.reclaimable))
 }
 
 // printTier prints one tier section, or nothing if the tier is empty.
