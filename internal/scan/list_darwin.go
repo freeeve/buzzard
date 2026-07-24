@@ -27,6 +27,7 @@ const (
 	attrCmnFileID     = 0x02000000
 	attrFileLinkCount = 0x00000001
 	attrFileAllocSize = 0x00000004
+	attrDirAllocSize  = 0x00000008
 	objTypeDir        = 2
 )
 
@@ -65,6 +66,7 @@ func (s *Scanner) listDir(dir string, emit func(*entryStat)) error {
 	al := attrlist{
 		bitmapcount: attrBitMapCount,
 		commonattr:  attrCmnReturned | attrCmnName | attrCmnDevID | attrCmnObjType | attrCmnModTime | attrCmnFileID,
+		dirattr:     attrDirAllocSize,
 		fileattr:    attrFileLinkCount | attrFileAllocSize,
 	}
 	bufp := attrBufPool.Get().(*[]byte)
@@ -113,6 +115,7 @@ func (s *Scanner) parseBulk(dir string, buf []byte, count int, emit func(*entryS
 		off += recLen
 		// attribute_set_t{common, vol, dir, file, fork} follows the length.
 		retCmn := binary.LittleEndian.Uint32(rec[4:])
+		retDir := binary.LittleEndian.Uint32(rec[12:])
 		retFile := binary.LittleEndian.Uint32(rec[16:])
 		p := 24
 		e = entryStat{}
@@ -149,6 +152,17 @@ func (s *Scanner) parseBulk(dir string, buf []byte, count int, emit func(*entryS
 				continue
 			}
 			e.name, e.isDir = name, true
+			if retDir&attrDirAllocSize != 0 && p+8 <= recLen {
+				e.bytes = int64(binary.LittleEndian.Uint64(rec[p:]))
+			} else {
+				// Directory alloc size withheld: stat the directory itself.
+				var st syscall.Stat_t
+				if syscall.Lstat(join(dir, name), &st) == nil {
+					e.bytes = st.Blocks * 512
+				} else {
+					atomic.AddInt64(&s.errs, 1)
+				}
+			}
 			emit(&e)
 			continue
 		}

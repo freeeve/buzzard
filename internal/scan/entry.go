@@ -30,14 +30,14 @@ func (s *Scanner) listGeneric(dir string, emit func(*entryStat)) error {
 	}
 	var e entryStat
 	for _, d := range entries {
-		if d.IsDir() {
-			e = entryStat{name: d.Name(), isDir: true}
-			emit(&e)
-			continue
-		}
 		var st syscall.Stat_t
 		if syscall.Lstat(join(dir, d.Name()), &st) != nil {
 			atomic.AddInt64(&s.errs, 1)
+			continue
+		}
+		if d.IsDir() {
+			e = entryStat{name: d.Name(), isDir: true, bytes: st.Blocks * 512}
+			emit(&e)
 			continue
 		}
 		e = entryStat{

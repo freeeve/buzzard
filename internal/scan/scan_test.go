@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/freeeve/buzzard/internal/rules"
@@ -157,6 +158,35 @@ func BenchmarkScan(b *testing.B) {
 		if res.Errors > 0 {
 			b.Fatalf("scan errors: %d", res.Errors)
 		}
+	}
+}
+
+// TestTotalMatchesReferenceWalk locks scan totals to an independent
+// lstat-sum over every file and directory including the root: deleting the
+// tree frees directory inode blocks too, so the total must include them.
+func TestTotalMatchesReferenceWalk(t *testing.T) {
+	root := t.TempDir()
+	writeBytes(t, root, "a/one.bin", 1<<20)
+	writeBytes(t, root, "a/b/two.bin", 1<<19)
+	writeBytes(t, root, "c/empty/.keep", 0)
+	var want int64
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		var st syscall.Stat_t
+		if err := syscall.Lstat(path, &st); err != nil {
+			return err
+		}
+		want += st.Blocks * 512
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := newScanner(t).Run(root)
+	if res.TotalBytes != want {
+		t.Errorf("TotalBytes = %d, reference lstat-sum = %d", res.TotalBytes, want)
 	}
 }
 

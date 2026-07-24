@@ -61,6 +61,22 @@ deletion would actually free.
 - Interactive TUI
 - Duplicate detection
 
+## Performance
+
+On macOS, buzzard lists directories with `getattrlistbulk`, retrieving the
+stat facts for many entries per syscall instead of one `lstat` per file.
+Measured with hyperfine on a quiet M3 Max (load-gated, warm cache, APFS,
+50k files / 5k dirs), July 2026:
+
+| tool | mean |
+|---|---|
+| buzzard v0.1.3 | 36.7 ± 3.7 ms |
+| gdu (master, `-npc`) | 70.3 ± 3.6 ms |
+
+1.92 ± 0.22× faster, with ~2.9× less total CPU — while also classifying
+reclaim candidates during the walk. Other platforms use a portable
+ReadDir+lstat walker, verified equivalent by test.
+
 ## Install
 
 ```sh

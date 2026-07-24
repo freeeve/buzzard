@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/freeeve/buzzard/internal/rules"
@@ -72,8 +73,15 @@ func New(rs *rules.Ruleset) *Scanner {
 // entries are counted as errors and skipped rather than aborting the scan.
 func (s *Scanner) Run(root string) *Result {
 	root = filepath.Clean(root)
+	var rootBytes int64
+	var st syscall.Stat_t
+	if syscall.Lstat(root, &st) == nil {
+		rootBytes = st.Blocks * 512
+	} else {
+		atomic.AddInt64(&s.errs, 1)
+	}
 	s.wg.Add(1)
-	s.walkDir(root, true)
+	s.walkDir(root, true, rootBytes)
 	s.wg.Wait()
 	return &Result{
 		Root:       root,
@@ -94,12 +102,14 @@ func join(dir, name string) string {
 
 // walkDir processes one directory, spawning bounded goroutines for child
 // directories when a semaphore slot is free and recursing inline otherwise.
-func (s *Scanner) walkDir(dir string, isRoot bool) {
+// ownBytes is the directory's own allocated size, observed by whoever listed
+// it, so a claimed candidate can charge its own inode to the reclaim total.
+func (s *Scanner) walkDir(dir string, isRoot bool, ownBytes int64) {
 	defer s.wg.Done()
 	if !isRoot {
 		if m := s.rules.Classify(dir); m != nil {
 			var newestSec int64
-			bytes := s.sizeSubtree(dir, &newestSec)
+			bytes := ownBytes + s.sizeSubtree(dir, &newestSec)
 			atomic.AddInt64(&s.total, bytes)
 			var newest time.Time
 			if newestSec > 0 {
@@ -111,21 +121,23 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 			return
 		}
 	}
+	atomic.AddInt64(&s.total, ownBytes)
 	err := s.listDir(dir, func(e *entryStat) {
 		if !e.isDir {
 			atomic.AddInt64(&s.total, s.dedupBytes(e))
 			return
 		}
 		path := join(dir, e.name)
+		own := e.bytes
 		s.wg.Add(1)
 		select {
 		case s.sem <- struct{}{}:
 			go func() {
 				defer func() { <-s.sem }()
-				s.walkDir(path, false)
+				s.walkDir(path, false, own)
 			}()
 		default:
-			s.walkDir(path, false)
+			s.walkDir(path, false, own)
 		}
 	})
 	if err != nil {
@@ -140,7 +152,7 @@ func (s *Scanner) sizeSubtree(dir string, newestSec *int64) int64 {
 	var bytes int64
 	err := s.listDir(dir, func(e *entryStat) {
 		if e.isDir {
-			bytes += s.sizeSubtree(join(dir, e.name), newestSec)
+			bytes += e.bytes + s.sizeSubtree(join(dir, e.name), newestSec)
 			return
 		}
 		bytes += s.dedupBytes(e)
