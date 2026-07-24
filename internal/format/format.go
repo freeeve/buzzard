@@ -23,25 +23,31 @@ func Human(b int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }
 
-// ParseSize parses a human size like "500K", "1M", "2G", or a plain byte
-// count. An empty string or "0" means zero.
+// ParseSize parses a human size: a plain byte count or a binary-prefixed
+// one in any usual spelling -- "500K", "1m", "1gb", "2GiB". An empty
+// string or "0" means zero.
 func ParseSize(s string) (int64, error) {
-	s = strings.TrimSpace(s)
+	orig := s
+	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
 		return 0, nil
 	}
+	s = strings.TrimSuffix(s, "b")
+	s = strings.TrimSuffix(s, "i")
 	mult := int64(1)
-	switch s[len(s)-1] {
-	case 'k', 'K':
-		mult, s = 1<<10, s[:len(s)-1]
-	case 'm', 'M':
-		mult, s = 1<<20, s[:len(s)-1]
-	case 'g', 'G':
-		mult, s = 1<<30, s[:len(s)-1]
+	if len(s) > 0 {
+		switch s[len(s)-1] {
+		case 'k':
+			mult, s = 1<<10, s[:len(s)-1]
+		case 'm':
+			mult, s = 1<<20, s[:len(s)-1]
+		case 'g':
+			mult, s = 1<<30, s[:len(s)-1]
+		}
 	}
 	n, err := strconv.ParseInt(s, 10, 64)
 	if err != nil || n < 0 {
-		return 0, fmt.Errorf("invalid size %q", s)
+		return 0, fmt.Errorf("invalid size %q", orig)
 	}
 	return n * mult, nil
 }

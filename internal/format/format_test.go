@@ -15,8 +15,15 @@ func TestParseSize(t *testing.T) {
 		{"1M", 1 << 20, true},
 		{"1m", 1 << 20, true},
 		{"2G", 2 << 30, true},
+		{"1gb", 1 << 30, true},
+		{"1GB", 1 << 30, true},
+		{"2GiB", 2 << 30, true},
+		{"500kb", 500 << 10, true},
+		{"1024b", 1024, true},
 		{"nope", 0, false},
 		{"-5M", 0, false},
+		{"b", 0, false},
+		{"gib", 0, false},
 	}
 	for _, c := range cases {
 		got, err := ParseSize(c.in)
