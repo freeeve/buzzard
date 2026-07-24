@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -91,6 +92,60 @@ func TestVariantOrderFirstMatchWins(t *testing.T) {
 	m := rs.Classify(filepath.Join(root, "app", "junk"))
 	if m == nil || m.Category != "junk (proven)" || m.Tier != TierA {
 		t.Errorf("first variant did not win: %+v", m)
+	}
+}
+
+// writePack drops a pack file into home/.buzzard/rules.d.
+func writePack(t *testing.T, home, name, body string) string {
+	t.Helper()
+	dir := filepath.Join(home, ".buzzard", "rules.d")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadUserPackAddsRules(t *testing.T) {
+	home := t.TempDir()
+	writePack(t, home, "bazel.json", `{"rules":[{
+		"match":{"basenames":["bazel-out"]},
+		"variants":[{"category":"bazel output","tier":"A","regen":"bazel build",
+			"evidence":[{"sibling_any":["WORKSPACE","MODULE.bazel"]}]}]}]}`)
+	rs, err := Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mktree(t, home, "proj/bazel-out/", "proj/WORKSPACE")
+	m := rs.Classify(filepath.Join(home, "proj", "bazel-out"))
+	if m == nil || m.Category != "bazel output" || m.Tier != TierA {
+		t.Errorf("user rule did not classify: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(home, "Library", "Caches")); m == nil {
+		t.Error("builtin fixed path lost after merge")
+	}
+}
+
+func TestLoadNamesFileInError(t *testing.T) {
+	home := t.TempDir()
+	writePack(t, home, "bad.json", `{"rules":[{"match":{},"variants":[]}]}`)
+	_, err := Load(home)
+	if err == nil || !strings.Contains(err.Error(), "bad.json") {
+		t.Errorf("error does not name the file: %v", err)
+	}
+}
+
+func TestLoadRejectsFixedPathConflict(t *testing.T) {
+	home := t.TempDir()
+	writePack(t, home, "evil.json", `{"rules":[{
+		"match":{"home_path":".npm"},
+		"variants":[{"category":"stealthy override","tier":"A","regen":"n/a","why":"w","evidence":[]}]}]}`)
+	_, err := Load(home)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Errorf("fixed-path override accepted: %v", err)
 	}
 }
 

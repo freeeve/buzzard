@@ -69,6 +69,36 @@ immediately before it moves, and `-restore` undoes the last clean.
 - Interactive TUI
 - Duplicate detection
 
+## Custom rule packs
+
+The rules are data. Drop JSON packs in `~/.buzzard/rules.d/` (or pass
+`-rules extra.json`) to teach buzzard new categories:
+
+```json
+{
+  "rules": [
+    {
+      "match": {"basenames": ["bazel-out"]},
+      "variants": [
+        {
+          "category": "bazel output",
+          "tier": "A",
+          "regen": "bazel build",
+          "evidence": [{"sibling_any": ["WORKSPACE", "MODULE.bazel"]}]
+        }
+      ]
+    }
+  ]
+}
+```
+
+A rule matches by `basenames`, by a file it must contain (`contains_any`),
+or by a fixed `home_path`. Variants are tried in order; the first whose
+evidence all holds claims the directory, and the report cites what matched.
+Every variant needs evidence or an explicit `why`, plus a `regen` command.
+Built-in rules take precedence, and a user pack cannot silently redefine a
+built-in fixed path.
+
 ## Performance
 
 On macOS, buzzard lists directories with `getattrlistbulk`, retrieving the

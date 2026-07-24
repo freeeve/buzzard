@@ -28,6 +28,7 @@ func main() {
 	yes := flag.Bool("yes", false, "skip the confirmation prompt for -clean")
 	restore := flag.Bool("restore", false, "restore everything from the most recent clean and exit")
 	manifestPath := flag.String("manifest", "", "manifest location (default ~/.buzzard/manifest.jsonl)")
+	rulePacks := flag.String("rules", "", "comma-separated extra rule pack files (also loads ~/.buzzard/rules.d/*.json)")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
@@ -61,7 +62,15 @@ func main() {
 	if err != nil {
 		home = ""
 	}
-	rs := rules.Default(home)
+	var extra []string
+	if *rulePacks != "" {
+		extra = strings.Split(*rulePacks, ",")
+	}
+	rs, err := rules.Load(home, extra...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "buzzard: %v\n", err)
+		os.Exit(1)
+	}
 	res := scan.New(rs).Run(root)
 	report(res, !*clean)
 	if *clean {

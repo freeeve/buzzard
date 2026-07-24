@@ -7,7 +7,9 @@ package rules
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -66,6 +68,50 @@ type compiledVariant struct {
 type compiledRule struct {
 	gate     MatchSpec
 	variants []compiledVariant
+}
+
+// Load returns the builtin ruleset extended with user packs from
+// home/.buzzard/rules.d/*.json (sorted) and any explicitly named pack
+// files. User rules append after builtins, so builtin claims win where
+// both match; a user pack redefining a builtin fixed path is an error
+// rather than a silent safety change.
+func Load(home string, extra ...string) (*Ruleset, error) {
+	rs := Default(home)
+	files, _ := filepath.Glob(filepath.Join(home, ".buzzard", "rules.d", "*.json"))
+	files = append(files, extra...)
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("pack %s: %w", f, err)
+		}
+		var p Pack
+		if err := json.Unmarshal(data, &p); err != nil {
+			return nil, fmt.Errorf("pack %s: %w", f, err)
+		}
+		user, err := Compile(&p, home)
+		if err != nil {
+			return nil, fmt.Errorf("pack %s: %w", f, err)
+		}
+		if err := rs.merge(user); err != nil {
+			return nil, fmt.Errorf("pack %s: %w", f, err)
+		}
+	}
+	return rs, nil
+}
+
+// merge appends another ruleset's rules after the receiver's own.
+func (rs *Ruleset) merge(other *Ruleset) error {
+	for base, crs := range other.byBase {
+		rs.byBase[base] = append(rs.byBase[base], crs...)
+	}
+	rs.gated = append(rs.gated, other.gated...)
+	for path, m := range other.fixed {
+		if _, exists := rs.fixed[path]; exists {
+			return fmt.Errorf("fixed path %s conflicts with an existing rule", path)
+		}
+		rs.fixed[path] = m
+	}
+	return nil
 }
 
 // Compile validates a pack and resolves it against a home directory into a
