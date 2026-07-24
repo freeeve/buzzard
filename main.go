@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/freeeve/buzzard/internal/dupes"
 	"github.com/freeeve/buzzard/internal/manifest"
 	"github.com/freeeve/buzzard/internal/rules"
 	"github.com/freeeve/buzzard/internal/scan"
@@ -27,7 +28,7 @@ import (
 // modified to be considered in active use.
 const activeWindow = 15 * time.Minute
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -36,6 +37,7 @@ func main() {
 	restore := flag.Bool("restore", false, "restore everything from the most recent clean and exit")
 	manifestPath := flag.String("manifest", "", "manifest location (default ~/.buzzard/manifest.jsonl)")
 	rulePacks := flag.String("rules", "", "comma-separated extra rule pack files (also loads ~/.buzzard/rules.d/*.json)")
+	findDupes := flag.Bool("dupes", false, "also report duplicate files (identical content, >= 1 MiB)")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
@@ -79,10 +81,43 @@ func main() {
 		os.Exit(1)
 	}
 	res := scan.New(rs).Run(root)
-	report(res, !*clean)
+	report(res, !*clean && !*findDupes)
+	if *findDupes {
+		reportDupes(root)
+	}
 	if *clean {
 		os.Exit(runClean(res, rs, mpath, *yes))
 	}
+}
+
+// reportDupes prints the largest groups of byte-identical files under root.
+func reportDupes(root string) {
+	const minSize = 1 << 20
+	const topN = 20
+	groups, err := dupes.Find(root, minSize)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "buzzard: dupes: %v\n", err)
+		return
+	}
+	if len(groups) == 0 {
+		fmt.Println("DUPLICATES: none at 1 MiB or larger.")
+		return
+	}
+	var wasted int64
+	for _, g := range groups {
+		wasted += g.Wasted()
+	}
+	fmt.Printf("DUPLICATES — identical content, largest waste first (top %d of %d groups)\n", min(topN, len(groups)), len(groups))
+	for i, g := range groups {
+		if i == topN {
+			break
+		}
+		fmt.Printf("  %9s wasted  %d copies of %s\n", human(g.Wasted()), len(g.Paths), human(g.Size))
+		for _, p := range g.Paths {
+			fmt.Printf("             %s\n", p)
+		}
+	}
+	fmt.Printf("total duplicate waste: %s (keep one copy of each)\n\n", human(wasted))
 }
 
 // runClean trashes the scan's tier A candidates behind a confirmation,
