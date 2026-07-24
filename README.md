@@ -110,18 +110,23 @@ built-in fixed path.
 
 On macOS, buzzard lists directories with `getattrlistbulk`, retrieving the
 stat facts for many entries per syscall instead of one `lstat` per file.
-Measured with hyperfine on a quiet M3 Max (load-gated, warm cache, APFS,
-50k files / 5k dirs), July 2026:
+Measured with hyperfine on a quiet M3 Max (load-gated, APFS), July 2026.
 
-| tool | mean |
-|---|---|
-| buzzard v0.1.3 | 36.7 ± 3.7 ms |
-| gdu (master, `-npc`) | 70.3 ± 3.6 ms |
+On a full real-world home directory, warm cache:
 
-1.92 ± 0.22× faster, with ~2.9× less total CPU — while also classifying
-reclaim candidates during the walk. On a full real-world home directory
-the gap widens: 113 s vs 324 s (2.9 ± 0.8×; gdu's variance was inflated
-by a background load spike mid-session) with ~6.9× less total CPU.
+| tool | mean | total CPU |
+|---|---|---|
+| buzzard v0.6.3 | 88.7 ± 5.0 s | 100 s |
+| gdu (master, `-npc`) | 170.5 ± 20.5 s | 778 s |
+
+1.92 ± 0.26× faster, with ~7.8× less total CPU — while also classifying
+reclaim candidates during the walk, which gdu does not do. The CPU gap is
+the wider of the two: buzzard spends 97 s of system time to gdu's 733 s,
+which is the `getattrlistbulk` batching showing up as syscalls not made.
+
+On a synthetic 50k file / 5k dir fixture the ratio holds at 1.92 ± 0.22×
+(36.7 ± 3.7 ms vs 70.3 ± 3.6 ms, measured at v0.1.3).
+
 Other platforms use a portable ReadDir+lstat walker, verified equivalent
 by test.
 
