@@ -1,0 +1,114 @@
+{
+  "rules": [
+    {
+      "match": {"basenames": ["node_modules"]},
+      "variants": [
+        {
+          "category": "node_modules",
+          "tier": "A",
+          "regen": "npm ci (or yarn/pnpm/bun install)",
+          "evidence": [
+            {"sibling_any": ["package.json"]},
+            {"sibling_any": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock"]}
+          ]
+        },
+        {
+          "category": "node_modules",
+          "tier": "B",
+          "regen": "npm install",
+          "why": "sibling package.json but no lockfile",
+          "evidence": [{"sibling_any": ["package.json"]}]
+        },
+        {
+          "category": "node_modules (orphaned)",
+          "tier": "B",
+          "regen": "none needed if the project is gone",
+          "why": "no package.json beside it; project may be gone",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["target"]},
+      "variants": [
+        {
+          "category": "cargo target",
+          "tier": "A",
+          "regen": "cargo build",
+          "evidence": [{"sibling_any": ["Cargo.toml"]}]
+        }
+      ]
+    },
+    {
+      "match": {"contains_any": ["pyvenv.cfg"]},
+      "variants": [
+        {
+          "category": "python venv",
+          "tier": "A",
+          "regen": "recreate venv and reinstall deps",
+          "evidence": [
+            {"contains_any": ["pyvenv.cfg"]},
+            {"sibling_any": ["requirements.txt", "pyproject.toml", "uv.lock", "Pipfile.lock", "poetry.lock"]}
+          ]
+        },
+        {
+          "category": "python venv",
+          "tier": "B",
+          "regen": "recreate venv (dependency list unknown)",
+          "why": "pyvenv.cfg inside, no dependency manifest beside it",
+          "evidence": [{"contains_any": ["pyvenv.cfg"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".parcel-cache", ".turbo"]},
+      "variants": [
+        {
+          "tier": "A",
+          "regen": "rebuilt automatically on next run",
+          "why": "tool cache; rebuilt on demand",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "match": {"basenames": [".next", ".nuxt", ".output"]},
+      "variants": [
+        {
+          "category_prefix": "build output ",
+          "tier": "A",
+          "regen": "npm run build",
+          "evidence": [{"sibling_any": ["package.json"]}]
+        }
+      ]
+    },
+    {
+      "match": {"home_path": "Library/Developer/Xcode/DerivedData"},
+      "variants": [{"category": "Xcode DerivedData", "tier": "A", "regen": "rebuild in Xcode", "why": "Xcode regenerates DerivedData on build", "evidence": []}]
+    },
+    {
+      "match": {"home_path": "Library/Caches"},
+      "variants": [{"category": "macOS user caches", "tier": "A", "regen": "apps rebuild caches on demand", "why": "macOS documents ~/Library/Caches as purgeable", "evidence": []}]
+    },
+    {
+      "match": {"home_path": ".npm"},
+      "variants": [{"category": "npm cache", "tier": "A", "regen": "refilled on next npm install", "why": "npm cache is content-addressed and re-fetched", "evidence": []}]
+    },
+    {
+      "match": {"home_path": ".cache"},
+      "variants": [{"category": "XDG cache", "tier": "A", "regen": "apps rebuild caches on demand", "why": "XDG contract: $HOME/.cache is non-essential", "evidence": []}]
+    },
+    {
+      "match": {"home_path": ".cargo/registry"},
+      "variants": [{"category": "cargo registry cache", "tier": "A", "regen": "refilled on next cargo build", "why": "crates re-downloaded from registry", "evidence": []}]
+    },
+    {
+      "match": {"home_path": "go/pkg/mod/cache"},
+      "variants": [{"category": "Go module cache", "tier": "A", "regen": "refilled on next go build", "why": "modules re-downloaded and checksum-verified", "evidence": []}]
+    },
+    {
+      "match": {"home_path": ".gradle/caches"},
+      "variants": [{"category": "Gradle caches", "tier": "A", "regen": "refilled on next gradle build", "why": "Gradle re-resolves dependencies", "evidence": []}]
+    }
+  ]
+}
