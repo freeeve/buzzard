@@ -30,7 +30,7 @@ import (
 // modified to be considered in active use.
 const activeWindow = 15 * time.Minute
 
-const version = "0.6.2"
+const version = "0.6.3"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")

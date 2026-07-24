@@ -6,7 +6,10 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -41,13 +44,49 @@ type model struct {
 	mode   int
 	stats  Stats
 	height int
+	watch  *exitWatch
+}
+
+// exitWatch caps quit latency: terminal input-reader shutdown has been
+// observed to hang until the next keypress on some terminals, freezing the
+// UI after quit. Once a quit is requested the watchdog gives the program a
+// grace period to exit naturally, then forces the exit -- the terminal is
+// already restored by the time the shutdown wait begins, so forcing is
+// safe.
+type exitWatch struct {
+	once   sync.Once
+	quitAt time.Time
+}
+
+// arm starts the countdown; the first quit request wins.
+func (w *exitWatch) arm() {
+	w.once.Do(func() {
+		w.quitAt = time.Now()
+		go func() {
+			time.Sleep(time.Second)
+			fmt.Fprintln(os.Stderr, "buzzard: input shutdown stalled; forcing exit")
+			os.Exit(0)
+		}()
+	})
+}
+
+// quit arms the watchdog and tells the program to stop.
+func (m model) quit() (tea.Model, tea.Cmd) {
+	if m.watch != nil {
+		m.watch.arm()
+	}
+	return m, tea.Quit
 }
 
 // Run starts the interactive browser over pre-sorted candidates. clean is
 // invoked with the marked set when the user confirms.
 func Run(cands []scan.Candidate, clean CleanFunc) error {
-	m := model{cands: cands, clean: clean, marked: make(map[int]bool), height: 24}
+	w := &exitWatch{}
+	m := model{cands: cands, clean: clean, marked: make(map[int]bool), height: 24, watch: w}
 	_, err := tea.NewProgram(m).Run()
+	if os.Getenv("BUZZARD_DEBUG") != "" && !w.quitAt.IsZero() {
+		fmt.Fprintf(os.Stderr, "buzzard: tui shutdown took %s\n", time.Since(w.quitAt).Round(time.Millisecond))
+	}
 	return err
 }
 
@@ -68,7 +107,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // key routes one keypress according to the current mode.
 func (m model) key(k string) (tea.Model, tea.Cmd) {
 	if k == "ctrl+c" {
-		return m, tea.Quit
+		return m.quit()
 	}
 	switch m.mode {
 	case modeConfirm:
@@ -81,12 +120,12 @@ func (m model) key(k string) (tea.Model, tea.Cmd) {
 		}
 	case modeDone:
 		if k == "q" || k == "enter" {
-			return m, tea.Quit
+			return m.quit()
 		}
 	default:
 		switch k {
 		case "q":
-			return m, tea.Quit
+			return m.quit()
 		case "j", "down":
 			if m.cursor < len(m.cands)-1 {
 				m.cursor++
