@@ -83,6 +83,122 @@
       ]
     },
     {
+      "match": {"basenames": ["target"]},
+      "variants": [
+        {
+          "category": "maven target",
+          "tier": "A",
+          "regen": "mvn compile",
+          "evidence": [{"sibling_any": ["pom.xml"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["build"]},
+      "variants": [
+        {
+          "category": "gradle build dir",
+          "tier": "A",
+          "regen": "gradle build",
+          "evidence": [{"sibling_any": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": [".gradle"]},
+      "variants": [
+        {
+          "category": "gradle project cache",
+          "tier": "A",
+          "regen": "rebuilt on next gradle run",
+          "evidence": [{"sibling_any": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["Pods"]},
+      "variants": [
+        {
+          "category": "CocoaPods",
+          "tier": "A",
+          "regen": "pod install",
+          "evidence": [{"sibling_any": ["Podfile.lock"]}]
+        },
+        {
+          "category": "CocoaPods",
+          "tier": "B",
+          "regen": "pod install (versions unpinned)",
+          "why": "sibling Podfile but no Podfile.lock",
+          "evidence": [{"sibling_any": ["Podfile"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["vendor"]},
+      "variants": [
+        {
+          "category": "composer vendor",
+          "tier": "A",
+          "regen": "composer install",
+          "evidence": [{"sibling_any": ["composer.lock"]}]
+        },
+        {
+          "category": "go vendor",
+          "tier": "A",
+          "regen": "go mod vendor",
+          "evidence": [{"sibling_any": ["go.mod"]}, {"contains_any": ["modules.txt"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": [".terraform"]},
+      "variants": [
+        {
+          "category": "terraform providers",
+          "tier": "A",
+          "regen": "terraform init",
+          "evidence": [{"sibling_any": [".terraform.lock.hcl"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": [".dart_tool"]},
+      "variants": [
+        {
+          "category": "dart tool cache",
+          "tier": "A",
+          "regen": "dart pub get",
+          "evidence": [{"sibling_any": ["pubspec.yaml"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": ["zig-cache", ".zig-cache", "zig-out"]},
+      "variants": [
+        {
+          "category_prefix": "zig ",
+          "tier": "A",
+          "regen": "zig build",
+          "evidence": [{"sibling_any": ["build.zig"]}]
+        }
+      ]
+    },
+    {
+      "match": {"basenames": [".tox", ".nox"]},
+      "variants": [
+        {
+          "category_prefix": "test env ",
+          "tier": "A",
+          "regen": "recreated on next tox/nox run",
+          "evidence": [{"sibling_any": ["tox.ini", "noxfile.py", "pyproject.toml", "setup.cfg"]}]
+        }
+      ]
+    },
+    {
+      "match": {"home_path": ".m2/repository"},
+      "variants": [{"category": "maven repository cache", "tier": "A", "regen": "refilled on next mvn build", "why": "artifacts re-downloaded from Maven Central", "evidence": []}]
+    },
+    {
       "match": {"home_path": "Library/Developer/Xcode/DerivedData"},
       "variants": [{"category": "Xcode DerivedData", "tier": "A", "regen": "rebuild in Xcode", "why": "Xcode regenerates DerivedData on build", "evidence": []}]
     },

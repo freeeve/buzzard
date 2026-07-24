@@ -124,6 +124,72 @@ func TestUnknownDirDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestMavenTargetCoexistsWithCargo(t *testing.T) {
+	root := t.TempDir()
+	mktree(t, root, "jproj/target/", "jproj/pom.xml", "rproj/target/", "rproj/Cargo.toml")
+	rs := Default(root)
+	if m := rs.Classify(filepath.Join(root, "jproj", "target")); m == nil || m.Category != "maven target" || m.Tier != TierA {
+		t.Errorf("maven target: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "rproj", "target")); m == nil || m.Category != "cargo target" {
+		t.Errorf("cargo target regressed: %+v", m)
+	}
+}
+
+func TestGradleBuildRequiresGradleFiles(t *testing.T) {
+	root := t.TempDir()
+	mktree(t, root, "gproj/build/", "gproj/build.gradle.kts", "plain/build/")
+	rs := Default(root)
+	if m := rs.Classify(filepath.Join(root, "gproj", "build")); m == nil || m.Tier != TierA {
+		t.Errorf("gradle build: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "plain", "build")); m != nil {
+		t.Errorf("bare build dir matched: %+v", m)
+	}
+}
+
+func TestPodsTierFollowsLockfile(t *testing.T) {
+	root := t.TempDir()
+	mktree(t, root, "locked/Pods/", "locked/Podfile", "locked/Podfile.lock", "loose/Pods/", "loose/Podfile", "stray/Pods/")
+	rs := Default(root)
+	if m := rs.Classify(filepath.Join(root, "locked", "Pods")); m == nil || m.Tier != TierA {
+		t.Errorf("locked Pods: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "loose", "Pods")); m == nil || m.Tier != TierB {
+		t.Errorf("unlocked Pods: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "stray", "Pods")); m != nil {
+		t.Errorf("stray Pods matched: %+v", m)
+	}
+}
+
+func TestVendorDisambiguatesComposerAndGo(t *testing.T) {
+	root := t.TempDir()
+	mktree(t, root, "php/vendor/", "php/composer.lock", "gomod/vendor/modules.txt", "gomod/go.mod", "misc/vendor/")
+	rs := Default(root)
+	if m := rs.Classify(filepath.Join(root, "php", "vendor")); m == nil || m.Category != "composer vendor" {
+		t.Errorf("composer vendor: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "gomod", "vendor")); m == nil || m.Category != "go vendor" {
+		t.Errorf("go vendor: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "misc", "vendor")); m != nil {
+		t.Errorf("evidence-free vendor matched: %+v", m)
+	}
+}
+
+func TestTerraformNeedsLockfile(t *testing.T) {
+	root := t.TempDir()
+	mktree(t, root, "infra/.terraform/", "infra/.terraform.lock.hcl", "wild/.terraform/")
+	rs := Default(root)
+	if m := rs.Classify(filepath.Join(root, "infra", ".terraform")); m == nil || m.Tier != TierA {
+		t.Errorf("terraform: %+v", m)
+	}
+	if m := rs.Classify(filepath.Join(root, "wild", ".terraform")); m != nil {
+		t.Errorf(".terraform without lockfile matched: %+v", m)
+	}
+}
+
 // BenchmarkClassifyMiss measures the no-match path, which runs once for
 // every directory the scanner visits and must stay near zero-cost.
 func BenchmarkClassifyMiss(b *testing.B) {
