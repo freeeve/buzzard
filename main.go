@@ -30,7 +30,7 @@ import (
 // modified to be considered in active use.
 const activeWindow = 15 * time.Minute
 
-const version = "0.6.0"
+const version = "0.6.1"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -41,6 +41,8 @@ func main() {
 	rulePacks := flag.String("rules", "", "comma-separated extra rule pack files (also loads ~/.buzzard/rules.d/*.json)")
 	findDupes := flag.Bool("dupes", false, "also report duplicate files (identical content, >= 1 MiB)")
 	interactive := flag.Bool("i", false, "interactive mode: browse, mark, and clean candidates")
+	minSize := flag.String("min-size", "1M", "hide candidates smaller than this (e.g. 500K, 1M, 0)")
+	showAll := flag.Bool("all", false, "show candidates of any size (same as -min-size 0)")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
@@ -83,8 +85,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "buzzard: %v\n", err)
 		os.Exit(1)
 	}
+	floor, err := format.ParseSize(*minSize)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "buzzard: -min-size: %v\n", err)
+		os.Exit(1)
+	}
+	if *showAll {
+		floor = 0
+	}
 	res := scan.New(rs).Run(root)
 	sortByScore(res)
+	hiddenCount, hiddenBytes := applyFloor(res, floor)
 	if *interactive {
 		err := tui.Run(res.Candidates, func(picks []scan.Candidate) tui.Stats {
 			var log []string
@@ -100,12 +111,36 @@ func main() {
 		return
 	}
 	report(res, !*clean && !*findDupes)
+	if hiddenCount > 0 {
+		fmt.Printf("(+ %d smaller candidates under %s, %s total -- show with -all)\n",
+			hiddenCount, format.Human(floor), format.Human(hiddenBytes))
+	}
 	if *findDupes {
 		reportDupes(root)
 	}
 	if *clean {
 		os.Exit(runClean(res, rs, mpath, *yes))
 	}
+}
+
+// applyFloor drops candidates smaller than floor from the result so every
+// output mode and the clean picks agree on what is visible, returning what
+// was hidden for the rollup line.
+func applyFloor(res *scan.Result, floor int64) (count int, bytes int64) {
+	if floor <= 0 {
+		return 0, 0
+	}
+	kept := res.Candidates[:0]
+	for _, c := range res.Candidates {
+		if c.Bytes >= floor {
+			kept = append(kept, c)
+			continue
+		}
+		count++
+		bytes += c.Bytes
+	}
+	res.Candidates = kept
+	return count, bytes
 }
 
 // sortByScore orders candidates by reclaim value for both output modes.

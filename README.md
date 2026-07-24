@@ -17,7 +17,9 @@ buzzard -restore         # put back everything from the most recent clean
 buzzard -dupes ~/src     # also list duplicate files (identical content)
 ```
 
-Candidates rank by reclaim value -- size weighted by idle time -- and
+Candidates under 1 MiB fold into a single rollup line by default
+(`-all` or `-min-size 500K` to adjust). Candidates rank by reclaim value
+-- size weighted by idle time -- and
 anything modified in the last 15 minutes or held open by a running process
 is flagged in use and skipped by cleaning.
 
