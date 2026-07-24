@@ -15,7 +15,7 @@ import (
 	"github.com/freeeve/buzzard/internal/scan"
 )
 
-const version = "0.1.0"
+const version = "0.1.3"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
