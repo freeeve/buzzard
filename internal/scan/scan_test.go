@@ -160,6 +160,65 @@ func BenchmarkScan(b *testing.B) {
 	}
 }
 
+// TestPlatformListMatchesGeneric locks the platform bulk-listing path to the
+// portable ReadDir+lstat path: totals, candidates, and hardlink dedup must
+// agree exactly on a tree with hardlinks, symlinks, and a candidate. On
+// platforms without a bulk path the two scans are identical by construction.
+func TestPlatformListMatchesGeneric(t *testing.T) {
+	root := t.TempDir()
+	writeBytes(t, root, "app/package.json", 10)
+	writeBytes(t, root, "app/package-lock.json", 10)
+	writeBytes(t, root, "app/node_modules/dep/index.js", 1<<20)
+	orig := writeBytes(t, root, "data/big.bin", 1<<19)
+	if err := os.Link(orig, filepath.Join(root, "data", "hard.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(orig, filepath.Join(root, "data", "soft.lnk")); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+
+	platform := New(rules.Default(home)).Run(root)
+	generic := New(rules.Default(home))
+	generic.useGeneric = true
+	want := generic.Run(root)
+
+	if platform.TotalBytes != want.TotalBytes {
+		t.Errorf("TotalBytes: platform %d != generic %d", platform.TotalBytes, want.TotalBytes)
+	}
+	if platform.Errors != want.Errors {
+		t.Errorf("Errors: platform %d != generic %d", platform.Errors, want.Errors)
+	}
+	if len(platform.Candidates) != len(want.Candidates) {
+		t.Fatalf("Candidates: platform %d != generic %d", len(platform.Candidates), len(want.Candidates))
+	}
+	for i, c := range platform.Candidates {
+		w := want.Candidates[i]
+		if c.Path != w.Path || c.Bytes != w.Bytes || c.Match.Category != w.Match.Category {
+			t.Errorf("candidate %d: platform %+v != generic %+v", i, c, w)
+		}
+		if c.NewestMod.Unix() != w.NewestMod.Unix() {
+			t.Errorf("candidate %d mtime: platform %v != generic %v", i, c.NewestMod, w.NewestMod)
+		}
+	}
+}
+
+// BenchmarkScanGeneric measures the portable listing path on the shared
+// fixture, the in-run A/B partner for BenchmarkScan's platform path.
+func BenchmarkScanGeneric(b *testing.B) {
+	root := benchTree(b)
+	home := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s := New(rules.Default(home))
+		s.useGeneric = true
+		if res := s.Run(root); res.Errors > 0 {
+			b.Fatalf("scan errors: %d", res.Errors)
+		}
+	}
+}
+
 // BenchmarkScanWidth sweeps the walker pool width to find where overlapping
 // syscalls stops paying on this hardware; the scan is syscall-bound, so
 // width, not CPU count, sets the throughput ceiling.

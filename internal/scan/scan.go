@@ -2,18 +2,16 @@
 // collects reclaim candidates classified by the rules package. Sizing uses
 // allocated blocks rather than apparent size so sparse files and dataless
 // cloud placeholders report what deletion would actually free, and hardlinked
-// files are counted once per inode. Per-file work stats through stack-held
-// syscall buffers rather than os.FileInfo to keep allocations off the hot
-// path.
+// files are counted once per inode. Directory listing goes through a
+// platform layer: batched attribute listing on darwin, ReadDir plus
+// stack-buffer lstat elsewhere, so per-file work stays off the heap.
 package scan
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/freeeve/buzzard/internal/rules"
@@ -38,7 +36,8 @@ type Result struct {
 // Scanner walks a tree concurrently, deduplicating hardlinks across the
 // whole scan and classifying directories as it descends.
 type Scanner struct {
-	rules *rules.Ruleset
+	rules      *rules.Ruleset
+	useGeneric bool
 
 	sem   chan struct{}
 	wg    sync.WaitGroup
@@ -107,32 +106,25 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 			return
 		}
 	}
-	entries, err := os.ReadDir(dir)
+	err := s.listDir(dir, func(e *entryStat) {
+		if !e.isDir {
+			atomic.AddInt64(&s.total, s.dedupBytes(e))
+			return
+		}
+		path := join(dir, e.name)
+		s.wg.Add(1)
+		select {
+		case s.sem <- struct{}{}:
+			go func() {
+				defer func() { <-s.sem }()
+				s.walkDir(path, false)
+			}()
+		default:
+			s.walkDir(path, false)
+		}
+	})
 	if err != nil {
 		atomic.AddInt64(&s.errs, 1)
-		return
-	}
-	for _, e := range entries {
-		path := join(dir, e.Name())
-		if e.IsDir() {
-			s.wg.Add(1)
-			select {
-			case s.sem <- struct{}{}:
-				go func() {
-					defer func() { <-s.sem }()
-					s.walkDir(path, false)
-				}()
-			default:
-				s.walkDir(path, false)
-			}
-			continue
-		}
-		var st syscall.Stat_t
-		if syscall.Lstat(path, &st) != nil {
-			atomic.AddInt64(&s.errs, 1)
-			continue
-		}
-		atomic.AddInt64(&s.total, s.dedupBytes(&st))
 	}
 }
 
@@ -140,36 +132,28 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 // modification time (unix seconds) seen, sharing the scan-wide hardlink
 // dedup so a subtree total never double counts an inode seen elsewhere.
 func (s *Scanner) sizeSubtree(dir string, newestSec *int64) int64 {
-	entries, err := os.ReadDir(dir)
+	var bytes int64
+	err := s.listDir(dir, func(e *entryStat) {
+		if e.isDir {
+			bytes += s.sizeSubtree(join(dir, e.name), newestSec)
+			return
+		}
+		bytes += s.dedupBytes(e)
+		if e.mtimeSec > *newestSec {
+			*newestSec = e.mtimeSec
+		}
+	})
 	if err != nil {
 		atomic.AddInt64(&s.errs, 1)
-		return 0
-	}
-	var bytes int64
-	for _, e := range entries {
-		path := join(dir, e.Name())
-		if e.IsDir() {
-			bytes += s.sizeSubtree(path, newestSec)
-			continue
-		}
-		var st syscall.Stat_t
-		if syscall.Lstat(path, &st) != nil {
-			atomic.AddInt64(&s.errs, 1)
-			continue
-		}
-		bytes += s.dedupBytes(&st)
-		if sec := mtimeSec(&st); sec > *newestSec {
-			*newestSec = sec
-		}
 	}
 	return bytes
 }
 
-// dedupBytes returns the allocated size recorded in st, counting
+// dedupBytes returns the allocated size recorded in e, counting
 // multiply-linked inodes only once across the entire scan.
-func (s *Scanner) dedupBytes(st *syscall.Stat_t) int64 {
-	if st.Nlink > 1 {
-		key := inode{dev: uint64(st.Dev), ino: uint64(st.Ino)}
+func (s *Scanner) dedupBytes(e *entryStat) int64 {
+	if e.nlink > 1 {
+		key := inode{dev: e.dev, ino: e.ino}
 		s.mu.Lock()
 		_, dup := s.seen[key]
 		if !dup {
@@ -180,5 +164,5 @@ func (s *Scanner) dedupBytes(st *syscall.Stat_t) int64 {
 			return 0
 		}
 	}
-	return st.Blocks * 512
+	return e.bytes
 }
