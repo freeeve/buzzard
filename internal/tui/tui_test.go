@@ -42,7 +42,7 @@ func press(t *testing.T, m tea.Model, keys ...string) tea.Model {
 
 func TestMarkAllTierAAndConfirmClean(t *testing.T) {
 	var got []scan.Candidate
-	m := tea.Model(model{cands: cands(), marked: map[int]bool{}, height: 24,
+	m := tea.Model(model{cands: cands(), marked: map[string]bool{}, height: 24,
 		clean: func(picks []scan.Candidate) Stats {
 			got = picks
 			return Stats{Trashed: len(picks), Freed: 6 << 20, Log: []string{"  trashed x"}}
@@ -59,11 +59,11 @@ func TestMarkAllTierAAndConfirmClean(t *testing.T) {
 
 func TestSpaceTogglesAndConfirmDeclines(t *testing.T) {
 	cleaned := false
-	m := tea.Model(model{cands: cands(), marked: map[int]bool{}, height: 24,
+	m := tea.Model(model{cands: cands(), marked: map[string]bool{}, height: 24,
 		clean: func([]scan.Candidate) Stats { cleaned = true; return Stats{} }})
 	m = press(t, m, " ", "down", " ", " ", "c", "n")
 	mm := m.(model)
-	if !mm.marked[0] || mm.marked[1] {
+	if !mm.marked["/src/a/node_modules"] || mm.marked["/src/b/target"] {
 		t.Errorf("marks wrong: %+v", mm.marked)
 	}
 	if cleaned {
@@ -75,7 +75,7 @@ func TestSpaceTogglesAndConfirmDeclines(t *testing.T) {
 }
 
 func TestCleanWithNothingMarkedIsNoop(t *testing.T) {
-	m := tea.Model(model{cands: cands(), marked: map[int]bool{}, height: 24,
+	m := tea.Model(model{cands: cands(), marked: map[string]bool{}, height: 24,
 		clean: func([]scan.Candidate) Stats { t.Fatal("clean called"); return Stats{} }})
 	m = press(t, m, "c")
 	if m.(model).mode != modeBrowse {
@@ -84,7 +84,7 @@ func TestCleanWithNothingMarkedIsNoop(t *testing.T) {
 }
 
 func TestBrowseViewShowsMarksAndTiers(t *testing.T) {
-	m := model{cands: cands(), marked: map[int]bool{0: true}, height: 24, clean: nil}
+	m := model{cands: cands(), marked: map[string]bool{"/src/a/node_modules": true}, height: 24, clean: nil}
 	view := m.View()
 	if !strings.Contains(view, "[x] A") || !strings.Contains(view, "node_modules") {
 		t.Errorf("browse view = %q", view)

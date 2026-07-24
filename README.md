@@ -11,7 +11,7 @@ structural evidence for the claim and the command that regenerates it.
 
 ```sh
 buzzard ~/src            # report what is reclaimable (deletes nothing)
-buzzard -i ~/src         # interactive: browse, mark, clean behind a confirm
+buzzard -i ~/src         # interactive: walk the tree, mark, clean behind a confirm
 buzzard -clean ~/src     # move tier A candidates to the OS trash (asks first)
 buzzard -restore         # put back everything from the most recent clean
 buzzard -dupes ~/src     # also list duplicate files (identical content)
@@ -21,6 +21,11 @@ Every run opens with a breakdown of where the space actually went -- one
 line per top-level directory, with the share of each that is reclaimable.
 Other disk tools can show you the sizes; only buzzard can fill in that
 second column.
+
+`-i` walks that same tree interactively: `enter` descends, `backspace`
+goes back up, `tab` filters to just the reclaim candidates, and `space`
+marks anything a rule has claimed. Marks are shared between the two
+views, and cleaning always runs through the same evidence re-check.
 
 Candidates under 1 MiB fold into a single rollup line by default
 (`-all` or `-min-size 500K` to adjust). Candidates rank by reclaim value

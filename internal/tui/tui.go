@@ -36,15 +36,33 @@ const (
 	modeDone
 )
 
+// The browser opens on the tree and filters to the candidate list on
+// demand, so the first thing shown is where the space went.
+const (
+	viewTree = iota
+	viewCands
+)
+
 type model struct {
 	cands  []scan.Candidate
+	byPath map[string]scan.Candidate
+	tree   *scan.Node
+	stack  []*scan.Node
+	tcurs  []int
 	clean  CleanFunc
 	cursor int
-	marked map[int]bool
+	marked map[string]bool
+	view   int
 	mode   int
 	stats  Stats
 	height int
 	watch  *exitWatch
+}
+
+// browsingTree reports whether the tree view is active. A scan with no
+// retained tree falls back to the candidate list.
+func (m model) browsingTree() bool {
+	return m.view == viewTree && m.tree != nil
 }
 
 // exitWatch caps quit latency: terminal input-reader shutdown has been
@@ -78,11 +96,25 @@ func (m model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
-// Run starts the interactive browser over pre-sorted candidates. clean is
-// invoked with the marked set when the user confirms.
-func Run(cands []scan.Candidate, clean CleanFunc) error {
+// Run starts the interactive browser over a completed scan, opening on the
+// directory tree. clean is invoked with the marked set when the user
+// confirms. Candidates are expected pre-sorted for the list view.
+func Run(res *scan.Result, clean CleanFunc) error {
 	w := &exitWatch{}
-	m := model{cands: cands, clean: clean, marked: make(map[int]bool), height: 24, watch: w}
+	byPath := make(map[string]scan.Candidate, len(res.Candidates))
+	for _, c := range res.Candidates {
+		byPath[c.Path] = c
+	}
+	m := model{
+		cands: res.Candidates, byPath: byPath, tree: res.Tree,
+		clean: clean, marked: make(map[string]bool), height: 24, watch: w,
+	}
+	if res.Tree != nil {
+		m.stack = []*scan.Node{res.Tree}
+		m.tcurs = []int{0}
+	} else {
+		m.view = viewCands
+	}
 	_, err := tea.NewProgram(m).Run()
 	if os.Getenv("BUZZARD_DEBUG") != "" && !w.quitAt.IsZero() {
 		fmt.Fprintf(os.Stderr, "buzzard: tui shutdown took %s\n", time.Since(w.quitAt).Round(time.Millisecond))
@@ -126,6 +158,31 @@ func (m model) key(k string) (tea.Model, tea.Cmd) {
 		switch k {
 		case "q":
 			return m.quit()
+		case "tab":
+			if m.tree != nil {
+				m.view = viewTree + viewCands - m.view
+			}
+			return m, nil
+		case "a":
+			for _, c := range m.cands {
+				if c.Match.Tier == rules.TierA {
+					m.marked[c.Path] = true
+				}
+			}
+			return m, nil
+		case "n":
+			m.marked = make(map[string]bool)
+			return m, nil
+		case "c":
+			if len(m.picks()) > 0 {
+				m.mode = modeConfirm
+			}
+			return m, nil
+		}
+		if m.browsingTree() {
+			return m.treeKey(k), nil
+		}
+		switch k {
 		case "j", "down":
 			if m.cursor < len(m.cands)-1 {
 				m.cursor++
@@ -136,30 +193,20 @@ func (m model) key(k string) (tea.Model, tea.Cmd) {
 			}
 		case " ", "space":
 			if len(m.cands) > 0 {
-				m.marked[m.cursor] = !m.marked[m.cursor]
-			}
-		case "a":
-			for i, c := range m.cands {
-				if c.Match.Tier == rules.TierA {
-					m.marked[i] = true
-				}
-			}
-		case "n":
-			m.marked = make(map[int]bool)
-		case "c":
-			if len(m.picks()) > 0 {
-				m.mode = modeConfirm
+				p := m.cands[m.cursor].Path
+				m.marked[p] = !m.marked[p]
 			}
 		}
 	}
 	return m, nil
 }
 
-// picks returns the marked candidates in display order.
+// picks returns the marked candidates in candidate-list order, so the
+// clean flow sees the same set whichever view marked them.
 func (m model) picks() []scan.Candidate {
 	var out []scan.Candidate
-	for i, c := range m.cands {
-		if m.marked[i] {
+	for _, c := range m.cands {
+		if m.marked[c.Path] {
 			out = append(out, c)
 		}
 	}
@@ -169,8 +216,8 @@ func (m model) picks() []scan.Candidate {
 // markedBytes sums the sizes of the marked candidates.
 func (m model) markedBytes() int64 {
 	var n int64
-	for i, c := range m.cands {
-		if m.marked[i] {
+	for _, c := range m.cands {
+		if m.marked[c.Path] {
 			n += c.Bytes
 		}
 	}
@@ -185,6 +232,9 @@ func (m model) View() string {
 	case modeDone:
 		return m.doneView()
 	}
+	if m.browsingTree() {
+		return m.treeView()
+	}
 	return m.browseView()
 }
 
@@ -193,7 +243,7 @@ func (m model) browseView() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "buzzard -- %d candidates, %d marked (%s)\n",
 		len(m.cands), len(m.picks()), format.Human(m.markedBytes()))
-	b.WriteString("[space] mark  [a] all tier A  [n] none  [c] clean marked  [q] quit\n\n")
+	b.WriteString("[space] mark  [a] all tier A  [n] none  [c] clean  [tab] tree  [q] quit\n\n")
 	if len(m.cands) == 0 {
 		b.WriteString("  nothing reclaimable found.\n")
 		return b.String()
@@ -212,7 +262,7 @@ func (m model) browseView() string {
 		if i == m.cursor {
 			cursor = ">"
 		}
-		if m.marked[i] {
+		if m.marked[c.Path] {
 			mark = "x"
 		}
 		fmt.Fprintf(&b, "%s [%s] %s %9s  %-24s idle %-6s %s\n",

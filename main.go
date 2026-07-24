@@ -97,7 +97,7 @@ func main() {
 	sortByScore(res)
 	hiddenCount, hiddenBytes := applyFloor(res, floor)
 	if *interactive {
-		err := tui.Run(res.Candidates, func(picks []scan.Candidate) tui.Stats {
+		err := tui.Run(res, func(picks []scan.Candidate) tui.Stats {
 			var log []string
 			trashed, freed, failed, skipped := executeClean(picks, rs, mpath, func(s string) {
 				log = append(log, s)
