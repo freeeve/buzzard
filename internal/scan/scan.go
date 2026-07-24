@@ -2,11 +2,12 @@
 // collects reclaim candidates classified by the rules package. Sizing uses
 // allocated blocks rather than apparent size so sparse files and dataless
 // cloud placeholders report what deletion would actually free, and hardlinked
-// files are counted once per inode.
+// files are counted once per inode. Per-file work stats through stack-held
+// syscall buffers rather than os.FileInfo to keep allocations off the hot
+// path.
 package scan
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -70,13 +71,21 @@ func (s *Scanner) Run(root string) *Result {
 	s.wg.Add(1)
 	s.walkDir(root, true)
 	s.wg.Wait()
-	res := &Result{
+	return &Result{
 		Root:       root,
 		TotalBytes: atomic.LoadInt64(&s.total),
 		Candidates: s.found,
 		Errors:     atomic.LoadInt64(&s.errs),
 	}
-	return res
+}
+
+// join concatenates a directory and entry name without the parse-and-clean
+// work of filepath.Join; scan paths are built from already-clean parents.
+func join(dir, name string) string {
+	if len(dir) > 0 && dir[len(dir)-1] == filepath.Separator {
+		return dir + name
+	}
+	return dir + string(filepath.Separator) + name
 }
 
 // walkDir processes one directory, spawning bounded goroutines for child
@@ -85,8 +94,13 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 	defer s.wg.Done()
 	if !isRoot {
 		if m := s.rules.Classify(dir); m != nil {
-			bytes, newest := s.sizeSubtree(dir)
+			var newestSec int64
+			bytes := s.sizeSubtree(dir, &newestSec)
 			atomic.AddInt64(&s.total, bytes)
+			var newest time.Time
+			if newestSec > 0 {
+				newest = time.Unix(newestSec, 0)
+			}
 			s.mu.Lock()
 			s.found = append(s.found, Candidate{Path: dir, Match: m, Bytes: bytes, NewestMod: newest})
 			s.mu.Unlock()
@@ -99,7 +113,7 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 		return
 	}
 	for _, e := range entries {
-		path := filepath.Join(dir, e.Name())
+		path := join(dir, e.Name())
 		if e.IsDir() {
 			s.wg.Add(1)
 			select {
@@ -113,46 +127,47 @@ func (s *Scanner) walkDir(dir string, isRoot bool) {
 			}
 			continue
 		}
-		atomic.AddInt64(&s.total, s.fileBytes(e))
+		var st syscall.Stat_t
+		if syscall.Lstat(path, &st) != nil {
+			atomic.AddInt64(&s.errs, 1)
+			continue
+		}
+		atomic.AddInt64(&s.total, s.dedupBytes(&st))
 	}
 }
 
-// sizeSubtree measures the on-disk bytes and newest modification time under
-// dir, sharing the scan-wide hardlink dedup so a subtree total never double
-// counts an inode already seen elsewhere.
-func (s *Scanner) sizeSubtree(dir string) (int64, time.Time) {
-	var bytes int64
-	var newest time.Time
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			atomic.AddInt64(&s.errs, 1)
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		bytes += s.fileBytes(d)
-		if info, err := d.Info(); err == nil && info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-		return nil
-	})
-	return bytes, newest
-}
-
-// fileBytes returns the allocated size of a non-directory entry, counting
-// multiply-linked inodes only once across the entire scan. Symlinks are
-// never followed; the link itself is measured.
-func (s *Scanner) fileBytes(d fs.DirEntry) int64 {
-	info, err := d.Info()
+// sizeSubtree measures the on-disk bytes under dir and tracks the newest
+// modification time (unix seconds) seen, sharing the scan-wide hardlink
+// dedup so a subtree total never double counts an inode seen elsewhere.
+func (s *Scanner) sizeSubtree(dir string, newestSec *int64) int64 {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		atomic.AddInt64(&s.errs, 1)
 		return 0
 	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return info.Size()
+	var bytes int64
+	for _, e := range entries {
+		path := join(dir, e.Name())
+		if e.IsDir() {
+			bytes += s.sizeSubtree(path, newestSec)
+			continue
+		}
+		var st syscall.Stat_t
+		if syscall.Lstat(path, &st) != nil {
+			atomic.AddInt64(&s.errs, 1)
+			continue
+		}
+		bytes += s.dedupBytes(&st)
+		if sec := mtimeSec(&st); sec > *newestSec {
+			*newestSec = sec
+		}
 	}
+	return bytes
+}
+
+// dedupBytes returns the allocated size recorded in st, counting
+// multiply-linked inodes only once across the entire scan.
+func (s *Scanner) dedupBytes(st *syscall.Stat_t) int64 {
 	if st.Nlink > 1 {
 		key := inode{dev: uint64(st.Dev), ino: uint64(st.Ino)}
 		s.mu.Lock()

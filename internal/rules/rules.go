@@ -6,8 +6,8 @@
 package rules
 
 import (
-	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // Tier grades how confident buzzard is that deleting a candidate is safe.
@@ -42,10 +42,12 @@ type Match struct {
 type Rule func(dir string) *Match
 
 // anyExists reports whether any of the named files exists in dir, returning
-// the first name found.
+// the first name found. It probes with syscall.Access rather than os.Lstat:
+// this path runs for directories the scanner visits, and a miss must not
+// allocate an error value.
 func anyExists(dir string, names ...string) (string, bool) {
 	for _, n := range names {
-		if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
+		if syscall.Access(dir+string(filepath.Separator)+n, 0) == nil {
 			return n, true
 		}
 	}
