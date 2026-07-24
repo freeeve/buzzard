@@ -190,6 +190,20 @@ func TestTerraformNeedsLockfile(t *testing.T) {
 	}
 }
 
+// BenchmarkDefault tracks the one-time cost of parsing and compiling the
+// embedded pack, so growth of the default rule set stays visible instead
+// of leaking into per-scan benchmarks.
+func BenchmarkDefault(b *testing.B) {
+	home := b.TempDir()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if rs := Default(home); rs == nil {
+			b.Fatal("nil ruleset")
+		}
+	}
+}
+
 // BenchmarkClassifyMiss measures the no-match path, which runs once for
 // every directory the scanner visits and must stay near zero-cost.
 func BenchmarkClassifyMiss(b *testing.B) {

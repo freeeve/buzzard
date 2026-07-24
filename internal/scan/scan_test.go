@@ -150,11 +150,11 @@ func TestMain(m *testing.M) {
 // per-file allocation count is the number to drive down.
 func BenchmarkScan(b *testing.B) {
 	root := benchTree(b)
-	home := b.TempDir()
+	rs := rules.Default(b.TempDir())
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res := New(rules.Default(home)).Run(root)
+		res := New(rs).Run(root)
 		if res.Errors > 0 {
 			b.Fatalf("scan errors: %d", res.Errors)
 		}
@@ -237,11 +237,11 @@ func TestPlatformListMatchesGeneric(t *testing.T) {
 // fixture, the in-run A/B partner for BenchmarkScan's platform path.
 func BenchmarkScanGeneric(b *testing.B) {
 	root := benchTree(b)
-	home := b.TempDir()
+	rs := rules.Default(b.TempDir())
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		s := New(rules.Default(home))
+		s := New(rs)
 		s.useGeneric = true
 		if res := s.Run(root); res.Errors > 0 {
 			b.Fatalf("scan errors: %d", res.Errors)
@@ -254,13 +254,13 @@ func BenchmarkScanGeneric(b *testing.B) {
 // width, not CPU count, sets the throughput ceiling.
 func BenchmarkScanWidth(b *testing.B) {
 	root := benchTree(b)
-	home := b.TempDir()
+	rs := rules.Default(b.TempDir())
 	for _, w := range []int{4, 8, 16, 32, 64, 128, 256} {
 		b.Run(fmt.Sprintf("w%d", w), func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				s := &Scanner{
-					rules: rules.Default(home),
+					rules: rs,
 					sem:   make(chan struct{}, w),
 					seen:  make(map[inode]struct{}),
 				}
