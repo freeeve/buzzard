@@ -119,8 +119,11 @@ Measured with hyperfine on a quiet M3 Max (load-gated, warm cache, APFS,
 | gdu (master, `-npc`) | 70.3 ± 3.6 ms |
 
 1.92 ± 0.22× faster, with ~2.9× less total CPU — while also classifying
-reclaim candidates during the walk. Other platforms use a portable
-ReadDir+lstat walker, verified equivalent by test.
+reclaim candidates during the walk. On a full real-world home directory
+the gap widens: 113 s vs 324 s (2.9 ± 0.8×; gdu's variance was inflated
+by a background load spike mid-session) with ~6.9× less total CPU.
+Other platforms use a portable ReadDir+lstat walker, verified equivalent
+by test.
 
 ## Install
 
