@@ -9,13 +9,18 @@ package scan
 
 import (
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/freeeve/buzzard/internal/rules"
 )
+
+// defaultWalkers bounds concurrent directory walkers. The scan is
+// syscall-bound, so the kernel, not the CPU count, sets the useful width:
+// a gated sweep on SSD showed throughput peaking at 8 and flat-to-worse
+// beyond it as goroutine churn grows.
+const defaultWalkers = 8
 
 // Candidate is a directory a rule claimed, sized and dated for the report.
 type Candidate struct {
@@ -58,7 +63,7 @@ type inode struct {
 func New(rs *rules.Ruleset) *Scanner {
 	return &Scanner{
 		rules: rs,
-		sem:   make(chan struct{}, runtime.NumCPU()*2),
+		sem:   make(chan struct{}, defaultWalkers),
 		seen:  make(map[inode]struct{}),
 	}
 }
