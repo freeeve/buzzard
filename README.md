@@ -10,7 +10,9 @@ structural evidence for the claim and the command that regenerates it.
 ## Usage
 
 ```sh
-buzzard ~/src
+buzzard ~/src            # report what is reclaimable (deletes nothing)
+buzzard -clean ~/src     # move tier A candidates to the OS trash (asks first)
+buzzard -restore         # put back everything from the most recent clean
 ```
 
 ```
@@ -54,10 +56,14 @@ allocated size -- zero on APFS, real blocks on filesystems that allocate
 them (some tools pad a flat 4 KiB per directory instead). The number
 reported is the number deletion would actually free.
 
+Cleaning is reversible by construction: items go to the OS trash (never
+`rm`) -- NSFileManager with Finder put-back on macOS, the freedesktop.org
+trash spec on Linux -- every move is recorded in `~/.buzzard/manifest.jsonl`
+with the evidence that justified it, each candidate's evidence is re-checked
+immediately before it moves, and `-restore` undoes the last clean.
+
 ## Roadmap
 
-- Deletion via the OS trash (never `rm`), dry-run by default, with a manifest
-  of everything removed
 - Rule packs as data (community-extensible categories)
 - Staleness-aware ranking and active-use veto (open handles, running builds)
 - Interactive TUI
