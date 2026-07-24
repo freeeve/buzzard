@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/freeeve/buzzard/internal/dupes"
+	"github.com/freeeve/buzzard/internal/format"
 	"github.com/freeeve/buzzard/internal/manifest"
 	"github.com/freeeve/buzzard/internal/rules"
 	"github.com/freeeve/buzzard/internal/scan"
 	"github.com/freeeve/buzzard/internal/trash"
+	"github.com/freeeve/buzzard/internal/tui"
 	"github.com/freeeve/buzzard/internal/veto"
 )
 
@@ -28,7 +30,7 @@ import (
 // modified to be considered in active use.
 const activeWindow = 15 * time.Minute
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -38,6 +40,7 @@ func main() {
 	manifestPath := flag.String("manifest", "", "manifest location (default ~/.buzzard/manifest.jsonl)")
 	rulePacks := flag.String("rules", "", "comma-separated extra rule pack files (also loads ~/.buzzard/rules.d/*.json)")
 	findDupes := flag.Bool("dupes", false, "also report duplicate files (identical content, >= 1 MiB)")
+	interactive := flag.Bool("i", false, "interactive mode: browse, mark, and clean candidates")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
@@ -81,6 +84,21 @@ func main() {
 		os.Exit(1)
 	}
 	res := scan.New(rs).Run(root)
+	sortByScore(res)
+	if *interactive {
+		err := tui.Run(res.Candidates, func(picks []scan.Candidate) tui.Stats {
+			var log []string
+			trashed, freed, failed, skipped := executeClean(picks, rs, mpath, func(s string) {
+				log = append(log, s)
+			})
+			return tui.Stats{Trashed: trashed, Freed: freed, Failed: failed, Skipped: skipped, Log: log}
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "buzzard: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	report(res, !*clean && !*findDupes)
 	if *findDupes {
 		reportDupes(root)
@@ -88,6 +106,62 @@ func main() {
 	if *clean {
 		os.Exit(runClean(res, rs, mpath, *yes))
 	}
+}
+
+// sortByScore orders candidates by reclaim value for both output modes.
+func sortByScore(res *scan.Result) {
+	sort.Slice(res.Candidates, func(i, j int) bool {
+		return score(res.Candidates[i]) > score(res.Candidates[j])
+	})
+}
+
+// executeClean re-verifies, vetoes, trashes, and records the picked
+// candidates, narrating each step through log. It is the single deletion
+// path shared by the CLI and the TUI.
+func executeClean(picks []scan.Candidate, rs *rules.Ruleset, mpath string, log func(string)) (trashed int, freed int64, failed, skipped int) {
+	runID := time.Now().Format("20060102-150405")
+	var recs []manifest.Record
+	for _, c := range picks {
+		if m := rs.Classify(c.Path); m == nil || m.Tier != c.Match.Tier {
+			log(fmt.Sprintf("  skip %s: evidence changed since the scan", c.Path))
+			skipped++
+			continue
+		}
+		if v := veto.Recent(c.NewestMod, activeWindow); v != nil {
+			log(fmt.Sprintf("  skip %s: in use (%s)", c.Path, v.Reason))
+			skipped++
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		v := veto.OpenHandles(ctx, c.Path)
+		cancel()
+		if v != nil {
+			log(fmt.Sprintf("  skip %s: in use (%s)", c.Path, v.Reason))
+			skipped++
+			continue
+		}
+		dest, err := trash.Put(c.Path)
+		if err != nil {
+			log(fmt.Sprintf("  fail %s: %v", c.Path, err))
+			failed++
+			continue
+		}
+		trashed++
+		freed += c.Bytes
+		log(fmt.Sprintf("  trashed %s (%s)", c.Path, format.Human(c.Bytes)))
+		recs = append(recs, manifest.Record{
+			RunID: runID, Action: manifest.ActionTrash, Time: time.Now(),
+			Path: c.Path, TrashedTo: dest, Category: c.Match.Category,
+			Tier: c.Match.Tier.String(), Evidence: c.Match.Evidence, Bytes: c.Bytes,
+		})
+	}
+	if len(recs) > 0 {
+		if err := manifest.Append(mpath, recs); err != nil {
+			log(fmt.Sprintf("manifest write failed: %v", err))
+			failed++
+		}
+	}
+	return trashed, freed, failed, skipped
 }
 
 // reportDupes prints the largest groups of byte-identical files under root.
@@ -112,12 +186,12 @@ func reportDupes(root string) {
 		if i == topN {
 			break
 		}
-		fmt.Printf("  %9s wasted  %d copies of %s\n", human(g.Wasted()), len(g.Paths), human(g.Size))
+		fmt.Printf("  %9s wasted  %d copies of %s\n", format.Human(g.Wasted()), len(g.Paths), format.Human(g.Size))
 		for _, p := range g.Paths {
 			fmt.Printf("             %s\n", p)
 		}
 	}
-	fmt.Printf("total duplicate waste: %s (keep one copy of each)\n\n", human(wasted))
+	fmt.Printf("total duplicate waste: %s (keep one copy of each)\n\n", format.Human(wasted))
 }
 
 // runClean trashes the scan's tier A candidates behind a confirmation,
@@ -137,54 +211,15 @@ func runClean(res *scan.Result, rs *rules.Ruleset, mpath string, yes bool) int {
 		return 0
 	}
 	if !yes {
-		fmt.Printf("trash %d tier A item(s), reclaiming %s? [y/N] ", len(picks), human(total))
+		fmt.Printf("trash %d tier A item(s), reclaiming %s? [y/N] ", len(picks), format.Human(total))
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if answer := strings.ToLower(strings.TrimSpace(line)); answer != "y" && answer != "yes" {
 			fmt.Println("aborted; nothing was deleted.")
 			return 0
 		}
 	}
-	runID := time.Now().Format("20060102-150405")
-	var recs []manifest.Record
-	var freed int64
-	failed := 0
-	for _, c := range picks {
-		if m := rs.Classify(c.Path); m == nil || m.Tier != rules.TierA {
-			fmt.Printf("  skip %s: evidence changed since the scan\n", c.Path)
-			continue
-		}
-		if v := veto.Recent(c.NewestMod, activeWindow); v != nil {
-			fmt.Printf("  skip %s: in use (%s)\n", c.Path, v.Reason)
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		v := veto.OpenHandles(ctx, c.Path)
-		cancel()
-		if v != nil {
-			fmt.Printf("  skip %s: in use (%s)\n", c.Path, v.Reason)
-			continue
-		}
-		dest, err := trash.Put(c.Path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  fail %s: %v\n", c.Path, err)
-			failed++
-			continue
-		}
-		freed += c.Bytes
-		fmt.Printf("  trashed %s (%s)\n", c.Path, human(c.Bytes))
-		recs = append(recs, manifest.Record{
-			RunID: runID, Action: manifest.ActionTrash, Time: time.Now(),
-			Path: c.Path, TrashedTo: dest, Category: c.Match.Category,
-			Tier: c.Match.Tier.String(), Evidence: c.Match.Evidence, Bytes: c.Bytes,
-		})
-	}
-	if len(recs) > 0 {
-		if err := manifest.Append(mpath, recs); err != nil {
-			fmt.Fprintf(os.Stderr, "buzzard: manifest write failed: %v\n", err)
-			return 1
-		}
-	}
-	fmt.Printf("\nmoved %d item(s) to the trash, %s reclaimable on empty.\n", len(recs), human(freed))
+	trashed, freed, failed, _ := executeClean(picks, rs, mpath, func(s string) { fmt.Println(s) })
+	fmt.Printf("\nmoved %d item(s) to the trash, %s reclaimable on empty.\n", trashed, format.Human(freed))
 	fmt.Printf("manifest: %s -- undo with: buzzard -restore\n", mpath)
 	if failed > 0 {
 		return 1
@@ -252,9 +287,6 @@ Flags:
 // and regeneration path for each. The dry-run footer is suppressed when a
 // clean is about to run.
 func report(res *scan.Result, footer bool) {
-	sort.Slice(res.Candidates, func(i, j int) bool {
-		return score(res.Candidates[i]) > score(res.Candidates[j])
-	})
 	var tierA, tierB []scan.Candidate
 	var reclaimA, reclaimB int64
 	for _, c := range res.Candidates {
@@ -266,11 +298,11 @@ func report(res *scan.Result, footer bool) {
 			reclaimB += c.Bytes
 		}
 	}
-	fmt.Printf("buzzard scanned %s: %s on disk\n\n", res.Root, human(res.TotalBytes))
+	fmt.Printf("buzzard scanned %s: %s on disk\n\n", res.Root, format.Human(res.TotalBytes))
 	printTier("TIER A — regenerable by contract", tierA)
 	printTier("TIER B — probably disposable, review each", tierB)
 	fmt.Printf("reclaimable: %s by contract (tier A), %s more after review (tier B)\n",
-		human(reclaimA), human(reclaimB))
+		format.Human(reclaimA), format.Human(reclaimB))
 	if res.Errors > 0 {
 		fmt.Printf("(%d entries unreadable and skipped)\n", res.Errors)
 	}
@@ -290,8 +322,8 @@ func printTier(title string, cs []scan.Candidate) {
 		if v := veto.Recent(c.NewestMod, activeWindow); v != nil {
 			active = "  [in use: " + v.Reason + "]"
 		}
-		fmt.Printf("  %9s  %-28s %s%s\n", human(c.Bytes), c.Match.Category, c.Path, active)
-		fmt.Printf("             idle %-22s regen: %s\n", idle(c.NewestMod), c.Match.Regen)
+		fmt.Printf("  %9s  %-28s %s%s\n", format.Human(c.Bytes), c.Match.Category, c.Path, active)
+		fmt.Printf("             idle %-22s regen: %s\n", format.Idle(c.NewestMod), c.Match.Regen)
 		fmt.Printf("             why: %s\n", c.Match.Evidence)
 	}
 	fmt.Println()
@@ -309,36 +341,4 @@ func score(c scan.Candidate) float64 {
 		}
 	}
 	return float64(c.Bytes) * (1 + math.Log2(1+idleDays))
-}
-
-// idle renders how long ago a subtree was last modified.
-func idle(t time.Time) string {
-	if t.IsZero() {
-		return "(empty)"
-	}
-	d := time.Since(t)
-	switch {
-	case d > 365*24*time.Hour:
-		return fmt.Sprintf("%.1fy", d.Hours()/(365*24))
-	case d > 30*24*time.Hour:
-		return fmt.Sprintf("%dmo", int(d.Hours()/(30*24)))
-	case d > 24*time.Hour:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	default:
-		return "<1d"
-	}
-}
-
-// human renders a byte count with binary prefixes.
-func human(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
 }

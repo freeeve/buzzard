@@ -11,9 +11,15 @@ structural evidence for the claim and the command that regenerates it.
 
 ```sh
 buzzard ~/src            # report what is reclaimable (deletes nothing)
+buzzard -i ~/src         # interactive: browse, mark, clean behind a confirm
 buzzard -clean ~/src     # move tier A candidates to the OS trash (asks first)
 buzzard -restore         # put back everything from the most recent clean
+buzzard -dupes ~/src     # also list duplicate files (identical content)
 ```
+
+Candidates rank by reclaim value -- size weighted by idle time -- and
+anything modified in the last 15 minutes or held open by a running process
+is flagged in use and skipped by cleaning.
 
 ```
 buzzard scanned /Users/you/src: 94.2 GiB on disk
@@ -64,10 +70,9 @@ immediately before it moves, and `-restore` undoes the last clean.
 
 ## Roadmap
 
-- Rule packs as data (community-extensible categories)
-- Staleness-aware ranking and active-use veto (open handles, running builds)
-- Interactive TUI
-- Duplicate detection
+- Sequential/narrow scan mode for spinning disks
+- Classification from directory listings (no evidence probes)
+- gdu JSON import for report interchange
 
 ## Custom rule packs
 
