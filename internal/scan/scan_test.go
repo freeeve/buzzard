@@ -160,6 +160,29 @@ func BenchmarkScan(b *testing.B) {
 	}
 }
 
+// BenchmarkScanWidth sweeps the walker pool width to find where overlapping
+// syscalls stops paying on this hardware; the scan is syscall-bound, so
+// width, not CPU count, sets the throughput ceiling.
+func BenchmarkScanWidth(b *testing.B) {
+	root := benchTree(b)
+	home := b.TempDir()
+	for _, w := range []int{4, 8, 16, 32, 64, 128, 256} {
+		b.Run(fmt.Sprintf("w%d", w), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				s := &Scanner{
+					rules: rules.Default(home),
+					sem:   make(chan struct{}, w),
+					seen:  make(map[inode]struct{}),
+				}
+				if res := s.Run(root); res.Errors > 0 {
+					b.Fatalf("scan errors: %d", res.Errors)
+				}
+			}
+		})
+	}
+}
+
 func TestSymlinksNotFollowed(t *testing.T) {
 	root := t.TempDir()
 	writeBytes(t, root, "real/big.bin", 1<<20)
