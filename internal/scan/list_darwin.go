@@ -142,22 +142,24 @@ func (s *Scanner) parseBulk(dir string, buf []byte, count int, emit func(*entryS
 			e.ino = binary.LittleEndian.Uint64(rec[p:])
 			p += 8
 		}
-		name := ""
+		// A view into the result buffer, which the next batch overwrites:
+		// materialize a string only where one has to outlive this record.
+		var name []byte
 		if nameLen > 1 && nameOff > 0 && nameOff+nameLen <= recLen {
-			name = string(rec[nameOff : nameOff+nameLen-1])
+			name = rec[nameOff : nameOff+nameLen-1]
 		}
 		if objType == objTypeDir {
-			if name == "" {
+			if len(name) == 0 {
 				atomic.AddInt64(&s.errs, 1)
 				continue
 			}
-			e.name, e.isDir = name, true
+			e.name, e.isDir = string(name), true
 			if retDir&attrDirAllocSize != 0 && p+8 <= recLen {
 				e.bytes = int64(binary.LittleEndian.Uint64(rec[p:]))
 			} else {
 				// Directory alloc size withheld: stat the directory itself.
 				var st syscall.Stat_t
-				if syscall.Lstat(join(dir, name), &st) == nil {
+				if syscall.Lstat(join(dir, e.name), &st) == nil {
 					e.bytes = st.Blocks * 512
 				} else {
 					atomic.AddInt64(&s.errs, 1)
@@ -178,12 +180,12 @@ func (s *Scanner) parseBulk(dir string, buf []byte, count int, emit func(*entryS
 		}
 		if !hasLink || !hasSize {
 			// Attributes withheld (unusual filesystem): stat this one entry.
-			if name == "" {
+			if len(name) == 0 {
 				atomic.AddInt64(&s.errs, 1)
 				continue
 			}
 			var st syscall.Stat_t
-			if syscall.Lstat(join(dir, name), &st) != nil {
+			if syscall.Lstat(join(dir, string(name)), &st) != nil {
 				atomic.AddInt64(&s.errs, 1)
 				continue
 			}
